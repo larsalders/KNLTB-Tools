@@ -1,12 +1,35 @@
 (function () {
-  // Existing rating calculation logic remains intact
-  const normalizeName = (name) => {
-    if (window.KNLTBUtils && typeof window.KNLTBUtils.normalizeName === 'function') {
-      return window.KNLTBUtils.normalizeName(name);
-    }
-    if (typeof name !== 'string') return '';
-    return name.toLowerCase().trim().replace(/\s+/g, " ");
+  const DEBUG = false;
+  const _log = DEBUG ? console.log.bind(console) : () => {};
+
+  const _ku = window.KNLTBUtils || {
+    normalizeName: name => typeof name === 'string' ? name.toLowerCase().trim().replace(/\s+/g, ' ') : '',
+    toAbsUrl: url => {
+      if (!url) return null;
+      if (/^https?:\/\//i.test(url)) return url;
+      if (url.startsWith('/')) return window.location.origin + url;
+      try { return new URL(url, window.location.href).href; } catch (e) { return null; }
+    },
+    matchSignature: m => { try { return JSON.stringify(m); } catch (e) { return String(m); } },
+    getMatchTimestamp: match => {
+      try {
+        let raw = String((match && (match.dateTime || match.date || '')) || '').trim();
+        if (!raw) return null;
+        raw = raw.replace(/^\s*(ma|di|wo|do|vr|za|zo|mon|tue|wed|thu|fri|sat|sun)\b\.?\,?\s*/i, '');
+        const dtMatch = raw.match(/(\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{4}(?:\s+\d{1,2}:\d{2})?)/);
+        if (dtMatch) {
+          const dmy = dtMatch[1].match(/(\d{1,2})[\.\-/](\d{1,2})[\.\-/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+          if (dmy) return new Date(parseInt(dmy[3],10), parseInt(dmy[2],10)-1, parseInt(dmy[1],10), dmy[4]?parseInt(dmy[4],10):0, dmy[5]?parseInt(dmy[5],10):0).getTime();
+        }
+        const iso = Date.parse(raw);
+        if (!Number.isNaN(iso)) return iso;
+      } catch (e) {}
+      return null;
+    },
+    categoryTokenFromText: () => null,
   };
+
+  const normalizeName = (name) => _ku.normalizeName(name);
 
   function calculateTeamRatingImpact(r1, r2, r3, r4) {
     const K = 0.275;
@@ -24,21 +47,7 @@
     };
   }
 
-  function formatRating(newR, oldR) {
-    const diff = newR - oldR;
-    const sign = diff > 0 ? "+" : "";
-    return `${newR.toFixed(4)} (${sign}${diff.toFixed(4)})`;
-  }
-
-  function formatPlayerLine(name, newRating, oldRating) {
-    const delta = newRating - oldRating;
-    const arrow = delta < 0 ? "▲" : "▼";
-    const color = delta < 0 ? "green" : "red";
-    const deltaStr = `<span style="color:${color}; font-weight:bold;">${arrow}${delta.toFixed(4)}</span>`;
-    return `${name} (${newRating.toFixed(4)}) ${deltaStr}`;
-  }
-
-  const teams = [];
+const teams = [];
   const playerRatings = {};
   // Baseline (starting) ratings for each player (seeded from teams table, updated on refresh)
   const playerBaselineRatings = {};
@@ -49,6 +58,8 @@
   // Track which players' ratings changed in the last refresh
   let dssLastChangedPlayers = new Set();
   let dssPanel = null;
+  // 'local' = Show Matches (group draw only), 'findAll' = Find All (cross-category)
+  let lastImportSource = null;
 
   function autoResizePanel(panel) {
     if (!panel || !(panel instanceof HTMLElement)) return;
@@ -144,11 +155,14 @@ function ensureSpinnerStyles() {
         width: 100%;
         min-width: 0;
       }
-      /* Make click targets a bit larger */
-      .dss-panel td button { 
-        padding: 8px 10px; 
-        font-size: 14px; 
-      }
+    }
+    .dss-team-cell {
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.1s;
+    }
+    .dss-team-cell:hover {
+      background-color: rgba(59, 130, 246, 0.08) !important;
     }
   `;
   document.head.appendChild(style);
@@ -206,18 +220,38 @@ if (!document.getElementById('dss-header-control-styles')) {
 function setLoading(isLoading, message = "") {
   const loader = document.getElementById('dss-loading');
   const status = document.getElementById('matchStatus');
+  const loadingMsg = document.getElementById('dss-loading-msg');
   const autoBtn = document.getElementById('autoGroupMatchesBtn');
   const refreshBtn = document.getElementById('refreshPlayerRatingsBtn');
   const loadBtn = document.getElementById('loadImportedBtn');
   if (loader) loader.style.display = isLoading ? 'flex' : 'none';
+  if (loadingMsg && message) loadingMsg.textContent = message;
   if (status && message) status.textContent = message;
+  if (!isLoading) setProgress(0, 0);
   [autoBtn, refreshBtn, loadBtn].forEach(btn => { if (btn) btn.disabled = !!isLoading; });
+}
+
+function setProgress(current, total, name, label = 'Player') {
+  const wrap = document.getElementById('dss-progress-wrap');
+  const bar = document.getElementById('dss-progress-bar');
+  const text = document.getElementById('dss-progress-text');
+  if (!wrap) return;
+  if (total > 0) {
+    wrap.style.display = 'flex';
+    const pct = Math.round((current / total) * 100);
+    if (bar) bar.style.width = pct + '%';
+    if (text) text.textContent = `${label} ${current} of ${total}${name ? ': ' + name : ''} (${pct}%)`;
+  } else {
+    wrap.style.display = 'none';
+    if (bar) bar.style.width = '0%';
+    if (text) text.textContent = '';
+  }
 }
 
   function extractTeamsFromTable() {
     const table = document.querySelectorAll("table.ruler")[1];
     if (!table) {
-      console.log("[DSS] No table found for teams extraction.");
+      _log("[DSS] No table found for teams extraction.");
       return;
     }
 
@@ -226,14 +260,14 @@ function setLoading(isLoading, message = "") {
       const playerCell = row.cells[1];
       const ratingCell = row.cells[3];
       if (!playerCell || !ratingCell) {
-        console.log(`[DSS] Skipping row ${index}: Missing player or rating cell.`);
+        _log(`[DSS] Skipping row ${index}: Missing player or rating cell.`);
         return;
       }
 
       // Singles support: allow for 1 player per team
       const playerLinks = playerCell.querySelectorAll("a");
       if (playerLinks.length === 0) {
-        console.log(`[DSS] Skipping row ${index}: No player links found.`);
+        _log(`[DSS] Skipping row ${index}: No player links found.`);
         return;
       }
       // Gather player names and their URLs
@@ -261,7 +295,7 @@ function setLoading(isLoading, message = "") {
           if (parsedRatings.every(r => !isNaN(r))) {
             ratings = parsedRatings;
           } else {
-            console.log(`[DSS] Skipping row ${index}: Unable to parse ratings from text '${text}'.`);
+            _log(`[DSS] Skipping row ${index}: Unable to parse ratings from text '${text}'.`);
             return;
           }
         }
@@ -269,7 +303,7 @@ function setLoading(isLoading, message = "") {
 
       // Validation: players.length must match ratings.length, and must not be zero
       if (players.length !== ratings.length || players.length === 0) {
-        console.log(`[DSS] Skipping row ${index}: Players count (${players.length}) does not match ratings count (${ratings.length}) or zero players.`);
+        _log(`[DSS] Skipping row ${index}: Players count (${players.length}) does not match ratings count (${ratings.length}) or zero players.`);
         return;
       }
 
@@ -283,26 +317,20 @@ function setLoading(isLoading, message = "") {
       });
 
       teams.push({ element: row, players, ratings, teamKey });
-      console.log(`[DSS] Added team: ${players.join(" & ")} with ratings: ${ratings.join(", ")}`);
+      _log(`[DSS] Added team: ${players.join(" & ")} with ratings: ${ratings.join(", ")}`);
     });
-    console.log(`[DSS] Total teams parsed: ${teams.length}`);
-    console.log(`[DSS] All teams:`);
-    teams.forEach(t => console.log(`  - ${t.players.join(" & ")}`));
+    _log(`[DSS] Total teams parsed: ${teams.length}`);
+    _log(`[DSS] All teams:`);
+    teams.forEach(t => _log(`  - ${t.players.join(" & ")}`));
     // Removed call to populatePlayerDropdown() from here
   }
 
   const toAbsUrl = (url) => {
-    if (window.KNLTBUtils && typeof window.KNLTBUtils.toAbsUrl === 'function') {
-      return window.KNLTBUtils.toAbsUrl(url);
-    }
+    if (_ku) return _ku.toAbsUrl(url);
     if (!url) return null;
     if (/^https?:\/\//i.test(url)) return url;
     if (url.startsWith('/')) return window.location.origin + url;
-    try {
-      return new URL(url, window.location.href).href;
-    } catch (e) {
-      return null;
-    }
+    try { return new URL(url, window.location.href).href; } catch (e) { return null; }
   };
 
   // Robust match type detector using page title, headings, and context
@@ -315,14 +343,13 @@ function setLoading(isLoading, message = "") {
       titleText = (ctx && ctx.rawTitle) ? String(ctx.rawTitle) : '';
     } catch (e) { titleText = ''; }
 
-    // If still empty, aggregate likely header/title nodes (cover draw page variations)
+    // If still empty, check header/title nodes — excluding .media__title which shows player names on draw pages
     if (!titleText) {
       const candidates = [
         '.page-subhead .media__title .nav-link__value',
         '.module__title .nav-link__value',
         '.module__title',
         '.module__subtitle',
-        '.media__title',
         '.page-title',
         '.module__heading',
         '#draw-matches .module__title',
@@ -341,20 +368,33 @@ function setLoading(isLoading, message = "") {
       }
     }
 
-    titleText = (titleText || document.title || '').toString().toLowerCase().replace(/\s+/g, ' ').trim();
+    // Always incorporate document.title since it reliably ends with the event name (e.g. "... - Tennis HE6")
+    const combinedText = (titleText + ' ' + document.title).toLowerCase().replace(/\s+/g, ' ').trim();
 
-    // Strong signals from title/ambient text
-    if (/\bpadel\b/.test(titleText) || /padel\s*double/.test(titleText)) {
-      console.log('[DSS] Match type: padel (from title/ambient) →', titleText);
-      return 'padel';
+    // Category codes are the most specific signal: HE/DE = singles, HD/DD/GD = doubles.
+    // Check these BEFORE any "padel" keyword so that "Open tennis en padel toernooi HE6" → single.
+    const tokens = combinedText.split(/\s+/);
+    if (tokens.some(t => /^(he|de)\d*$/i.test(t))) {
+      _log('[DSS] Match type: single (from HE/DE category token) →', combinedText);
+      return 'single';
     }
-    if (/\b(HD|DD|GD)\b/i.test(titleText) || /\bdubbel\b/i.test(titleText) || /\bdoubles?\b/i.test(titleText)) {
-      console.log('[DSS] Match type: double (from title/ambient) →', titleText);
+    if (tokens.some(t => /^(hd|dd|gd)\d*$/i.test(t))) {
+      _log('[DSS] Match type: double (from HD/DD/GD category token) →', combinedText);
       return 'double';
     }
-    if (/\b(HE|DE)\b/i.test(titleText) || /\b(enkel|single|singles?)\b/.test(titleText)) {
-      console.log('[DSS] Match type: single (from title/ambient) →', titleText);
+
+    // Keyword signals — padel last because it appears in navigation on any KNLTB page
+    if (/\bdubbel\b/i.test(combinedText) || /\bdoubles?\b/i.test(combinedText)) {
+      _log('[DSS] Match type: double (from keyword) →', combinedText);
+      return 'double';
+    }
+    if (/\benkel\b/i.test(combinedText) || /\bsingles?\b/i.test(combinedText)) {
+      _log('[DSS] Match type: single (from keyword) →', combinedText);
       return 'single';
+    }
+    if (/\bpadel\b/.test(combinedText)) {
+      _log('[DSS] Match type: padel (from keyword) →', combinedText);
+      return 'padel';
     }
 
     // Team-size heuristic as a reliable fallback (handles draw pages where labels are absent)
@@ -362,42 +402,58 @@ function setLoading(isLoading, message = "") {
       const allSingles = teams.every(t => (t.players || []).length === 1);
       const anyDoubles = teams.some(t => (t.players || []).length === 2);
       if (allSingles) {
-        console.log('[DSS] Match type: single (from team size fallback)');
+        _log('[DSS] Match type: single (from team size fallback)');
         return 'single';
       }
       if (anyDoubles) {
-        console.log('[DSS] Match type: double (from team size fallback)');
+        _log('[DSS] Match type: double (from team size fallback)');
         return 'double';
       }
     }
 
-    // Last-chance ambient scan for key tokens anywhere on the page
+    // Last-chance: scan for category tokens in the visible page text
     try {
       const ambient = Array.from(document.querySelectorAll('body *'))
-        .slice(0, 200) // limit scanning cost
+        .slice(0, 200)
         .map(el => (el.textContent || '').toLowerCase())
         .join(' ');
-      if (/\bpadel\b/.test(ambient)) return 'padel';
-      if (/\bdubbel\b|\bdouble(s)?\b|\b(dd|gd|hd)\b/i.test(ambient)) return 'double';
-      if (/\benkel\b|\bsingle(s)?\b|\b(he|de)\b/i.test(ambient)) return 'single';
+      const ambientTokens = ambient.split(/\s+/);
+      if (ambientTokens.some(t => /^(he|de)\d*$/.test(t))) return 'single';
+      if (ambientTokens.some(t => /^(hd|dd|gd)\d*$/.test(t))) return 'double';
+      if (/\benkel\b|\bsingles?\b/.test(ambient)) return 'single';
+      if (/\bdubbel\b|\bdoubles?\b/.test(ambient)) return 'double';
     } catch (e) {}
 
-    console.log('[DSS] Match type: defaulting to double (no explicit signal)');
+    _log('[DSS] Match type: defaulting to double (no explicit signal)');
     return 'double';
   }
   
   // Async function to refresh all player ratings from their profile URLs
   async function refreshPlayerRatings() {
-    console.log("[DSS] Refreshing player ratings from profile URLs...");
+    _log("[DSS] Refreshing player ratings from profile URLs...");
     setLoading(true, 'Refreshing player ratings…');
 
     const prevRatings = { ...playerRatings };
 
     // Determine match type from page title and context (robust DD/GD/HD vs padel)
     const currentMatchType = detectMatchTypeFromPage();
-    console.log('[DSS] Using match type for rating extraction:', currentMatchType);
+    _log('[DSS] Using match type for rating extraction:', currentMatchType);
 
-    for (const [normName, url] of Object.entries(playerUrls)) {
+    const playerEntries = Object.entries(playerUrls);
+    const totalPlayers = playerEntries.length;
+    let playerIndex = 0;
+
+    for (const [normName, url] of playerEntries) {
+      playerIndex++;
+      // Resolve display name for progress
+      let displayName = normName;
+      for (const team of teams) {
+        for (const p of team.players) {
+          if (normalizeName(p) === normName) { displayName = p; break; }
+        }
+      }
+      setProgress(playerIndex, totalPlayers, displayName);
+
       try {
         // If url is relative, construct absolute URL
         let absUrl = url;
@@ -414,7 +470,7 @@ function setLoading(isLoading, message = "") {
         const doc = parser.parseFromString(html, "text/html");
 
         // Diagnostics: log fetched URL and basic markers
-        console.log(`[DSS] Fetched profile for ${normName}: ${absUrl}`);
+        _log(`[DSS] Fetched profile for ${normName}: ${absUrl}`);
         const bodyText = doc.body ? doc.body.textContent.slice(0, 200) : '';
         // Detect login/unauthorized pages heuristically
         const looksLikeLogin = /inloggen|login|wachtwoord|password/i.test(bodyText) || doc.querySelector('form[action*="login"], input[type="password"]');
@@ -432,7 +488,7 @@ function setLoading(isLoading, message = "") {
         )
           .filter(span => span.querySelector('.tag-duo__value'))
           .filter(span => !span.closest(EXCLUDE_ANCESTOR_SELECTOR));
-        console.log(`[DSS] tooltip spans found (filtered): ${tooltipSpans.length}`);
+        _log(`[DSS] tooltip spans found (filtered): ${tooltipSpans.length}`);
         tooltipSpans.forEach(span => {
           const typeRaw = (
             span.getAttribute('data-original-title') || span.getAttribute('title') || ''
@@ -442,11 +498,11 @@ function setLoading(isLoading, message = "") {
           const raw = valueEl.textContent.trim().replace(/\s+/g, '');
           const numeric = parseFloat(raw.replace(/[^\d,.\-]/g, '').replace(',', '.'));
           if (isNaN(numeric)) return;
-          if (typeRaw.includes('single')) ratingsObj.single = numeric;
-          if (typeRaw.includes('double') && !typeRaw.includes('padel')) ratingsObj.double = numeric;
+          if (typeRaw.includes('single') || typeRaw.includes('enkel')) ratingsObj.single = numeric;
+          if ((typeRaw.includes('double') || typeRaw.includes('dubbel')) && !typeRaw.includes('padel')) ratingsObj.double = numeric;
           if (typeRaw.includes('padel')) ratingsObj.padel = numeric;
         });
-        console.log('[DSS] ratingsObj after tooltip scan:', ratingsObj);
+        _log('[DSS] ratingsObj after tooltip scan:', ratingsObj);
         
         // Strategy B: if A yielded nothing useful, fall back to scanning candidate ULs and pick the best one
         if (
@@ -467,8 +523,8 @@ function setLoading(isLoading, message = "") {
               const raw = valueEl.textContent.trim().replace(/\s+/g, '');
               const val = parseFloat(raw.replace(/[^\d,.\-]/g, '').replace(',', '.'));
               if (isNaN(val)) return;
-              if (type.includes('single')) res.single = val;
-              if (type.includes('double') && !type.includes('padel')) res.double = val;
+              if (type.includes('single') || type.includes('enkel')) res.single = val;
+              if ((type.includes('double') || type.includes('dubbel')) && !type.includes('padel')) res.double = val;
               if (type.includes('padel')) res.padel = val;
             });
             return res;
@@ -485,11 +541,11 @@ function setLoading(isLoading, message = "") {
           listsToCheck.forEach((ul, idx) => {
             const res = extractFromRoot(ul);
             const s = score(res);
-            console.log(`[DSS] Candidate rating list #${idx}:`, res, `score=${s}`);
+            _log(`[DSS] Candidate rating list #${idx}:`, res, `score=${s}`);
             if (s > bestScore) { best = res; bestScore = s; bestIndex = idx; }
           });
           if (best) ratingsObj = best;
-          console.log(`[DSS] Chosen rating list #${bestIndex}:`, ratingsObj);
+          _log(`[DSS] Chosen rating list #${bestIndex}:`, ratingsObj);
         }
         
         // Ultimate fallback: doc-wide search for any tag-duo__value + data-original-title or title pair
@@ -507,11 +563,11 @@ function setLoading(isLoading, message = "") {
             const raw = valueEl.textContent.trim().replace(/\s+/g, '');
             const val = parseFloat(raw.replace(/[^\d,.\-]/g, '').replace(',', '.'));
             if (isNaN(val)) return;
-            if (type.includes('single')) ratingsObj.single = val;
-            if (type.includes('double') && !type.includes('padel')) ratingsObj.double = val;
+            if (type.includes('single') || type.includes('enkel')) ratingsObj.single = val;
+            if ((type.includes('double') || type.includes('dubbel')) && !type.includes('padel')) ratingsObj.double = val;
             if (type.includes('padel')) ratingsObj.padel = val;
           });
-          console.log('[DSS] Fallback (doc-wide) rating extraction:', ratingsObj);
+          _log('[DSS] Fallback (doc-wide) rating extraction:', ratingsObj);
         }
 
         // Pick the rating for the current match type
@@ -535,7 +591,7 @@ function setLoading(isLoading, message = "") {
               }
             }
           }
-          console.log(
+          _log(
             `[DSS] Updated ratings for ${originalName} (${normName}): ` +
               `Single=${ratingsObj.single ?? "?"}, Double=${ratingsObj.double ?? "?"}, Padel=${ratingsObj.padel ?? "?"}. ` +
               `Applied "${currentMatchType}" rating: ${appliedRating}`
@@ -790,16 +846,53 @@ function setLoading(isLoading, message = "") {
     const loadingRow = document.createElement('div');
     loadingRow.id = 'dss-loading';
     loadingRow.style.display = 'none';
-    loadingRow.style.alignItems = 'center';
-    loadingRow.style.gap = '8px';
+    loadingRow.style.flexDirection = 'column';
+    loadingRow.style.gap = '4px';
     loadingRow.style.margin = '6px 0';
+
+    const loadingTopRow = document.createElement('div');
+    loadingTopRow.style.display = 'flex';
+    loadingTopRow.style.alignItems = 'center';
+    loadingTopRow.style.gap = '8px';
     const spinner = document.createElement('span');
     spinner.className = 'dss-spinner';
     const loadingMsg = document.createElement('span');
+    loadingMsg.id = 'dss-loading-msg';
     loadingMsg.textContent = 'Working…';
-    loadingRow.appendChild(spinner);
-    loadingRow.appendChild(loadingMsg);
-  contentWrap.appendChild(loadingRow);
+    loadingTopRow.appendChild(spinner);
+    loadingTopRow.appendChild(loadingMsg);
+    loadingRow.appendChild(loadingTopRow);
+
+    const progressWrap = document.createElement('div');
+    progressWrap.id = 'dss-progress-wrap';
+    progressWrap.style.display = 'none';
+    progressWrap.style.flexDirection = 'column';
+    progressWrap.style.gap = '3px';
+
+    const progressBarOuter = document.createElement('div');
+    progressBarOuter.style.width = '100%';
+    progressBarOuter.style.height = '6px';
+    progressBarOuter.style.background = '#e0e0e0';
+    progressBarOuter.style.borderRadius = '3px';
+    progressBarOuter.style.overflow = 'hidden';
+    const progressBarInner = document.createElement('div');
+    progressBarInner.id = 'dss-progress-bar';
+    progressBarInner.style.height = '100%';
+    progressBarInner.style.width = '0%';
+    progressBarInner.style.background = '#3b82f6';
+    progressBarInner.style.borderRadius = '3px';
+    progressBarInner.style.transition = 'width 0.25s ease';
+    progressBarOuter.appendChild(progressBarInner);
+    progressWrap.appendChild(progressBarOuter);
+
+    const progressText = document.createElement('div');
+    progressText.id = 'dss-progress-text';
+    progressText.style.fontSize = '11px';
+    progressText.style.color = '#555';
+    progressWrap.appendChild(progressText);
+
+    loadingRow.appendChild(progressWrap);
+    contentWrap.appendChild(loadingRow);
 
     const matchTable = document.createElement("table");
     matchTable.id = "matchList";
@@ -812,7 +905,7 @@ function setLoading(isLoading, message = "") {
     matchTable.style.marginTop = "8px";
     matchTable.style.border = "1px solid #ddd";
     matchTable.innerHTML = `
-    <thead>
+    <thead style="position:sticky;top:0;z-index:2;">
       <tr style="background:#eee;font-weight:bold">
         <th>Date/Time</th>
         <th>Team 1</th>
@@ -824,7 +917,6 @@ function setLoading(isLoading, message = "") {
         <th>Win % (T1 | T2)</th>
         <th>Category</th>
         <th>Result</th>
-        <th>Winner</th>
       </tr>
     </thead>
     <tbody></tbody>`;
@@ -1009,7 +1101,7 @@ function setLoading(isLoading, message = "") {
     // Ensure matches are processed in chronological order (oldest first) because rating calculations depend on order
     try {
       // Stable sort: pair each item with its original index so ties keep import order
-      const paired = matchQueue.map((m, i) => ({ m, i, t: getMatchTimestamp(m) }));
+      const paired = matchQueue.map((m, i) => ({ m, i, t: _ku ? _ku.getMatchTimestamp(m) : null }));
       paired.sort((A, B) => {
         const ta = A.t;
         const tb = B.t;
@@ -1030,10 +1122,21 @@ function setLoading(isLoading, message = "") {
     }
     tbody.innerHTML = "";
 
+    // Column visibility
+    const matchType = detectMatchTypeFromPage();
+    const showAvg = matchType !== 'single';
+    const showCategory = lastImportSource === 'findAll';
+    const thead = table.querySelector('thead tr');
+    if (thead) {
+      const ths = thead.querySelectorAll('th');
+      if (ths[6]) ths[6].style.display = showAvg ? '' : 'none';
+      if (ths[8]) ths[8].style.display = showCategory ? '' : 'none';
+    }
+
     if (matchQueue.length === 0) {
       const emptyRow = document.createElement('tr');
       const emptyCell = document.createElement('td');
-      emptyCell.colSpan = 11;
+      emptyCell.colSpan = 11 - (showAvg ? 0 : 1) - (showCategory ? 0 : 1);
       emptyCell.textContent = 'No matches loaded yet. Press "Find all" or "Show Matches" to import and display matches.';
       emptyCell.style.padding = '12px 8px';
       emptyCell.style.textAlign = 'center';
@@ -1067,7 +1170,6 @@ function setLoading(isLoading, message = "") {
       const tdProb = document.createElement("td");
   const tdRes = document.createElement("td");
   const tdCat = document.createElement("td");
-  const td4 = document.createElement("td");
 
       // Date/Time cell
       const dateStr = match.dateTime || match.date || '—';
@@ -1100,10 +1202,14 @@ function setLoading(isLoading, message = "") {
       tdAvg.textContent = `${t1Avg.toFixed(4)} | ${t2Avg.toFixed(4)}`;
       tdAvg.style.textAlign = 'center';
       tdAvg.style.whiteSpace = 'nowrap';
+      if (!showAvg) tdAvg.style.display = 'none';
       // Probability calculation and styling
       const qProb = 2.012; // same q as rating function
       const expectedT1 = 1 / (1 + Math.exp(qProb * (t1Avg - t2Avg)));
-      tdProb.textContent = `${(expectedT1 * 100).toFixed(1)}% | ${(100 - expectedT1 * 100).toFixed(1)}%`;
+      const t1Pct = (expectedT1 * 100).toFixed(1);
+      const t2Pct = (100 - expectedT1 * 100).toFixed(1);
+      const t1Favored = expectedT1 >= 0.5;
+      tdProb.innerHTML = `<span style="color:${t1Favored ? '#1a7f1a' : '#b00020'};font-weight:${t1Favored ? '700' : '400'}">${t1Pct}%</span> | <span style="color:${!t1Favored ? '#1a7f1a' : '#b00020'};font-weight:${!t1Favored ? '700' : '400'}">${t2Pct}%</span>`;
       tdProb.style.textAlign = 'center';
       tdProb.style.whiteSpace = 'nowrap';
 
@@ -1111,6 +1217,7 @@ function setLoading(isLoading, message = "") {
   tdCat.textContent = match.category || '—';
   tdCat.style.textAlign = 'center';
   tdCat.style.whiteSpace = 'nowrap';
+  if (!showCategory) tdCat.style.display = 'none';
 
   // Result column (render set scores if available). If no score but we have a special
       // result flag (walkover/opgave), display that instead of a dash.
@@ -1136,7 +1243,7 @@ function setLoading(isLoading, message = "") {
       if (t1Changed || t2Changed) { tdAvg.classList.remove('dss-blink'); void tdAvg.offsetWidth; tdAvg.classList.add('dss-blink'); }
 
       // Add padding so columns don't "touch"
-  [tdDate, td1r, td3r, tdAvg, tdProb, tdCat, tdRes, td2, td4].forEach(td => { td.style.padding = '4px 8px'; });
+  [tdDate, td1r, td3r, tdAvg, tdProb, tdCat, tdRes, td2].forEach(td => { td.style.padding = '4px 8px'; });
 
       // Default: just show names (no ratings)
       td1.innerHTML = match.team1.players.map((p, i) => `<div>${p}</div>`).join("");
@@ -1147,16 +1254,12 @@ function setLoading(isLoading, message = "") {
       td3.style.padding = "4px 8px";
       tr.style.lineHeight = '1.3';
 
-      ["team1", "team2"].forEach(side => {
-        const btn = document.createElement("button");
-        btn.textContent = side === "team1" ? "⬅️" : "➡️";
-        btn.style.margin = "0 4px";
-        btn.onclick = () => {
-          match.winner = side;
-          recomputeRatings();
-        };
-        td4.appendChild(btn);
-      });
+      td1.classList.add('dss-team-cell');
+      td3.classList.add('dss-team-cell');
+      td1.title = 'Click to set Team 1 as winner';
+      td3.title = 'Click to set Team 2 as winner';
+      td1.onclick = () => { match.winner = match.winner === 'team1' ? null : 'team1'; recomputeRatings(); };
+      td3.onclick = () => { match.winner = match.winner === 'team2' ? null : 'team2'; recomputeRatings(); };
 
       tr.appendChild(tdDate);
       tr.appendChild(td1);
@@ -1168,7 +1271,6 @@ function setLoading(isLoading, message = "") {
   tr.appendChild(tdProb);
   tr.appendChild(tdCat);
   tr.appendChild(tdRes);
-  tr.appendChild(td4);
 
       if (match.winner) {
         // Detect special result flags
@@ -1375,101 +1477,22 @@ function findTeamByPlayers(playerNames) {
     const teamSize = teamSet.size;
     const isExactMatch = normSize === teamSize && [...normSet].every(p => teamSet.has(p));
     if (isExactMatch) {
-      console.log(`[DSS] Exact match found: imported players [${[...normSet].join(", ")}] match team [${[...teamSet].join(", ")}]`);
+      _log(`[DSS] Exact match found: imported players [${[...normSet].join(", ")}] match team [${[...teamSet].join(", ")}]`);
       return true;
     }
     // Allow partial matches if one set is subset of the other (allow one player difference)
     const isSubset = [...normSet].every(p => teamSet.has(p));
     const isSuperset = [...teamSet].every(p => normSet.has(p));
     if ((isSubset && (teamSize - normSize) <= 1) || (isSuperset && (normSize - teamSize) <= 1)) {
-      console.log(`[DSS] Partial match accepted: imported players [${[...normSet].join(", ")}] partial match with team [${[...teamSet].join(", ")}]`);
+      _log(`[DSS] Partial match accepted: imported players [${[...normSet].join(", ")}] partial match with team [${[...teamSet].join(", ")}]`);
       return true;
     }
-    console.log(`[DSS] No match: imported players [${[...normSet].join(", ")}] vs team [${[...teamSet].join(", ")}]`);
+    _log(`[DSS] No match: imported players [${[...normSet].join(", ")}] vs team [${[...teamSet].join(", ")}]`);
     return false;
   });
   return foundTeam;
 }
 
-// Create a stable signature for a match so we can deduplicate matches across
-// sources. Accepts either imported-match objects ({team1: [...], team2:[...], score, date/dateTime})
-// or internal matchQueue entries ({team1: {players:[...]}, team2:{players:[...]}, score, date/dateTime}).
-function matchSignature(m) {
-  try {
-    const t1 = Array.isArray(m.team1) ? m.team1 : (m.team1 && Array.isArray(m.team1.players) ? m.team1.players : []);
-    const t2 = Array.isArray(m.team2) ? m.team2 : (m.team2 && Array.isArray(m.team2.players) ? m.team2.players : []);
-    const norm = (arr) => (arr || []).map(s => normalizeName(String(s || ''))).filter(Boolean).sort().join('|');
-    const s1 = norm(t1);
-    const s2 = norm(t2);
-    // Make team part order-insensitive so TeamA vs TeamB == TeamB vs TeamA
-    const teamsSorted = [s1, s2].sort().join('||');
-    // Normalize date to YYYY-MM-DD if possible (inputs like '8-9-2025' or '8-9-2025 19:45')
-    const rawDate = (m.dateTime || m.date || '') + '';
-    let dateSig = '';
-    try {
-      const dmatch = rawDate.match(/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);
-      if (dmatch) {
-        const dd = dmatch[1].padStart(2, '0');
-        const mm = dmatch[2].padStart(2, '0');
-        const yyyy = dmatch[3];
-        dateSig = `${yyyy}-${mm}-${dd}`;
-      } else if (rawDate.trim()) {
-        // fallback: use raw trimmed text (shortened) to avoid completely ignoring date differences
-        dateSig = rawDate.trim().slice(0, 32);
-      }
-    } catch (e) { dateSig = rawDate + ''; }
-    const score = Array.isArray(m.score) ? JSON.stringify(m.score) : '';
-    return `${teamsSorted}::${dateSig}::${score}`;
-  } catch (e) {
-    return JSON.stringify(m);
-  }
-}
-
-// Parse a match's date/dateTime fields into a numeric timestamp (ms since epoch).
-// Supports formats like '8-9-2025', '8-9-2025 19:45', '2025-09-08', and ISO-like strings.
-function getMatchTimestamp(m) {
-  try {
-    let raw = (m && (m.dateTime || m.date || '') || '').toString().trim();
-    if (!raw) return null;
-    // Strip common weekday prefixes like 'ma', 'di', 'wo', 'do', 'vr', 'za', 'zo' or localized weekday words
-    raw = raw.replace(/^\s*(ma|di|wo|do|vr|za|zo|mon|tue|wed|thu|fri|sat|sun)\b\.?,?\s*/i, '');
-    // Extract the first date-like token (supports 'D-M-YYYY' with optional time)
-    const dtMatch = raw.match(/(\d{1,2}[\.\-/]\d{1,2}[\.\-/]\d{4}(?:\s+\d{1,2}:\d{2})?)/);
-    if (dtMatch) {
-      const token = dtMatch[1];
-      // Try parsing token parts
-      const dmy = token.match(/(\d{1,2})[\.\-/](\d{1,2})[\.\-/](\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
-      if (dmy) {
-        const dd = parseInt(dmy[1], 10);
-        const mon = parseInt(dmy[2], 10) - 1;
-        const yyyy = parseInt(dmy[3], 10);
-        const hh = dmy[4] ? parseInt(dmy[4], 10) : 0;
-        const mi = dmy[5] ? parseInt(dmy[5], 10) : 0;
-        const dt = new Date(yyyy, mon, dd, hh, mi, 0);
-        return dt.getTime();
-      }
-    }
-
-    // ISO-like fallback
-    const iso = Date.parse(raw);
-    if (!Number.isNaN(iso)) return iso;
-
-    // Try YYYY-MM-DD patterns
-    const ymd = raw.match(/(\d{4})[\.\-/](\d{1,2})[\.\-/](\d{1,2})(?:[T\s](\d{1,2}):(\d{2}))?/);
-    if (ymd) {
-      const yyyy = parseInt(ymd[1], 10);
-      const mon = parseInt(ymd[2], 10) - 1;
-      const dd = parseInt(ymd[3], 10);
-      const hh = ymd[4] ? parseInt(ymd[4], 10) : 0;
-      const mi = ymd[5] ? parseInt(ymd[5], 10) : 0;
-      const dt = new Date(yyyy, mon, dd, hh, mi, 0);
-      return dt.getTime();
-    }
-  } catch (e) {
-    console.warn('[DSS] getMatchTimestamp parse error for', m, e);
-  }
-  return null;
-}
 
   function loadImportedMatches() {
     // Read both importedMatches and the optional importedProfilesCache created by the crawler
@@ -1484,11 +1507,11 @@ function getMatchTimestamp(m) {
       let requiredTeamSize = null;
       if (pageMatchType === 'double' || pageMatchType === 'padel') requiredTeamSize = 2;
       else if (pageMatchType === 'single') requiredTeamSize = 1;
-      console.log('[DSS] loadImportedMatches: page match type=', pageMatchType, 'requiredTeamSize=', requiredTeamSize);
+      _log('[DSS] loadImportedMatches: page match type=', pageMatchType, 'requiredTeamSize=', requiredTeamSize);
 
       let importedCount = 0;
       // Build a set of existing match signatures to avoid pushing duplicates
-      const existingSigs = new Set(matchQueue.map(mq => matchSignature(mq)));
+      const existingSigs = new Set(matchQueue.map(mq => _ku.matchSignature(mq)));
       // Also maintain a relaxed set that ignores date/time differences (teams+score only)
       const existingRelaxed = new Set(Array.from(existingSigs).map(s => {
         // relaxed form: drop the date/score suffix if present (teams::date::score -> teams::)
@@ -1507,7 +1530,7 @@ function getMatchTimestamp(m) {
             const t1len = Array.isArray(team1) ? team1.length : (team1 && Array.isArray(team1.players) ? team1.players.length : 0);
             const t2len = Array.isArray(team2) ? team2.length : (team2 && Array.isArray(team2.players) ? team2.players.length : 0);
             if (requiredTeamSize !== null && (t1len !== requiredTeamSize || t2len !== requiredTeamSize)) {
-              console.log('[DSS] Skipping imported match due to team-size mismatch vs page type - expected', requiredTeamSize, 'got', t1len, '&', t2len, 'for imported match #', idx+1);
+              _log('[DSS] Skipping imported match due to team-size mismatch vs page type - expected', requiredTeamSize, 'got', t1len, '&', t2len, 'for imported match #', idx+1);
               continue;
             }
           } catch (e) {
@@ -1515,32 +1538,32 @@ function getMatchTimestamp(m) {
           }
 
           const imp = { team1, team2, winner, score, date, dateTime, _playerProfiles };
-  const sig = matchSignature(imp);
+  const sig = _ku.matchSignature(imp);
         if (seenImported.has(sig)) {
-          console.log('[DSS] Skipping duplicate imported match (dupe in imported array) #', idx+1);
+          _log('[DSS] Skipping duplicate imported match (dupe in imported array) #', idx+1);
           continue;
         }
         seenImported.add(sig);
         if (existingSigs.has(sig)) {
-          console.log('[DSS] Skipping import because exact match already exists in queue #', idx+1);
+          _log('[DSS] Skipping import because exact match already exists in queue #', idx+1);
           continue;
         }
         // relaxed signature: ignore date/time differences so we don't import duplicates that only differ by missing/variant dates
         const parts = sig.split('::');
         const relaxedSig = (parts[0] || '') + '::' + (parts[2] || '');
         if (existingRelaxed.has(relaxedSig)) {
-          console.log('[DSS] Skipping import because a matching teams+score entry already exists in queue #', idx+1);
+          _log('[DSS] Skipping import because a matching teams+score entry already exists in queue #', idx+1);
           continue;
         }
-  console.log("===============================================");
-  console.log(`[DSS] Processing imported match #${idx + 1}:`);
-  console.log(`[DSS] Looking for Team1: [${(team1||[]).join(", ")}]`);
-  console.log(`[DSS] Looking for Team2: [${(team2||[]).join(", ")}]`);
+  _log("===============================================");
+  _log(`[DSS] Processing imported match #${idx + 1}:`);
+  _log(`[DSS] Looking for Team1: [${(team1||[]).join(", ")}]`);
+  _log(`[DSS] Looking for Team2: [${(team2||[]).join(", ")}]`);
         // Show normalized player names for debug
         const normTeam1 = team1.map(normalizeName);
         const normTeam2 = team2.map(normalizeName);
-        console.log(`[DSS] Normalized Team1 player names: [${normTeam1.join(", ")}]`);
-        console.log(`[DSS] Normalized Team2 player names: [${normTeam2.join(", ")}]`);
+        _log(`[DSS] Normalized Team1 player names: [${normTeam1.join(", ")}]`);
+        _log(`[DSS] Normalized Team2 player names: [${normTeam2.join(", ")}]`);
         // Ensure we have ratings for imported players where possible. If playerBaselineRatings or playerRatings
         // are missing for a normalized player name, attempt to fetch from stored profile URL or global playerUrls map.
         // Also try fuzzy matching (surname/substring) against any attached _playerProfiles and global playerUrls.
@@ -1628,7 +1651,7 @@ function getMatchTimestamp(m) {
                   if (candidate.rating !== null && candidate.rating !== undefined) {
                     playerRatings[nn] = candidate.rating;
                     if (playerBaselineRatings[nn] === undefined) playerBaselineRatings[nn] = candidate.rating;
-                    console.log('[DSS] Seeded rating from candidate match data for', pn, nn, candidate.rating, 'matchedKey=', candidate.key);
+                    _log('[DSS] Seeded rating from candidate match data for', pn, nn, candidate.rating, 'matchedKey=', candidate.key);
                     continue;
                   }
                   if (candidate.url) {
@@ -1637,46 +1660,38 @@ function getMatchTimestamp(m) {
                     if (val !== null) {
                       playerRatings[nn] = val;
                       if (playerBaselineRatings[nn] === undefined) playerBaselineRatings[nn] = val;
-                      console.log('[DSS] Seeded rating from profile (candidate url) for', pn, nn, val, 'matchedKey=', candidate.key);
+                      _log('[DSS] Seeded rating from profile (candidate url) for', pn, nn, val, 'matchedKey=', candidate.key);
                       continue;
                     } else {
-                      console.log('[DSS] fetchProfileRating returned null for candidate url', pn, nn, candidate.url);
+                      _log('[DSS] fetchProfileRating returned null for candidate url', pn, nn, candidate.url);
                     }
                   }
                 }
               } catch (e) { console.warn('[DSS] candidate lookup failed for', pn, e); }
 
               // If we reach here, nothing was found
-              console.log('[DSS] No profile URL or rating candidate found for', pn, nn);
-              try { console.log('[DSS] Imported match _playerProfiles snapshot:', JSON.parse(JSON.stringify(_playerProfiles || {}))); } catch(e){}
+              _log('[DSS] No profile URL or rating candidate found for', pn, nn);
+              try { _log('[DSS] Imported match _playerProfiles snapshot:', JSON.parse(JSON.stringify(_playerProfiles || {}))); } catch(e){}
             } catch (e) { console.warn('[DSS] ensureRatingsForPlayers error for', pn, e); }
           }
         };
 
-        // Try to infer category token from the imported match set or surrounding metadata; prefer doubles/singles
-        let inferredToken = null;
-        try {
-          // If the imported match came with a category token stored under _playerProfiles (rare), use that
-          // Otherwise let token detection remain null and prefer pageMatchType in fetchProfileRating
-          inferredToken = null;
-        } catch (e) { inferredToken = null; }
-
         // Pre-fetch ratings for both teams in parallel
         try {
-          await Promise.all([ensureRatingsForPlayers(team1, inferredToken), ensureRatingsForPlayers(team2, inferredToken)]);
+          await Promise.all([ensureRatingsForPlayers(team1, null), ensureRatingsForPlayers(team2, null)]);
         } catch (e) { console.warn('[DSS] Pre-fetch ratings failed for imported match #', idx+1, e); }
 
         const matchTeam1 = findTeamByPlayers(team1);
         const matchTeam2 = findTeamByPlayers(team2);
         if (matchTeam1) {
-          console.log(`[DSS] Found matching team for Team1: [${matchTeam1.players.join(", ")}]`);
+          _log(`[DSS] Found matching team for Team1: [${matchTeam1.players.join(", ")}]`);
         } else {
-          console.log(`[DSS] Imported match team1 not found: [${team1.join(", ")}]`);
+          _log(`[DSS] Imported match team1 not found: [${team1.join(", ")}]`);
         }
         if (matchTeam2) {
-          console.log(`[DSS] Found matching team for Team2: [${matchTeam2.players.join(", ")}]`);
+          _log(`[DSS] Found matching team for Team2: [${matchTeam2.players.join(", ")}]`);
         } else {
-          console.log(`[DSS] Imported match team2 not found: [${team2.join(", ")}]`);
+          _log(`[DSS] Imported match team2 not found: [${team2.join(", ")}]`);
         }
         // If either team isn't found among parsed teams, create a synthetic team object so the match
         // can still be displayed in the overview. Seed baseline ratings from known playerRatings when available.
@@ -1687,35 +1702,34 @@ function getMatchTimestamp(m) {
           (finalTeam1.players || []).forEach(p => {
             try { const nn = normalizeName(p); if (playerBaselineRatings[nn] === undefined && typeof playerRatings[nn] === 'number') playerBaselineRatings[nn] = playerRatings[nn]; } catch(e){}
           });
-          console.log('[DSS] Created synthetic Team1 for import:', finalTeam1.players.join(', '));
+          _log('[DSS] Created synthetic Team1 for import:', finalTeam1.players.join(', '));
         }
         if (!finalTeam2) {
           finalTeam2 = { players: Array.isArray(team2) ? team2.slice() : [], teamKey: (Array.isArray(team2) ? team2.map(normalizeName).join('|') : '') };
           (finalTeam2.players || []).forEach(p => {
             try { const nn = normalizeName(p); if (playerBaselineRatings[nn] === undefined && typeof playerRatings[nn] === 'number') playerBaselineRatings[nn] = playerRatings[nn]; } catch(e){}
           });
-          console.log('[DSS] Created synthetic Team2 for import:', finalTeam2.players.join(', '));
+          _log('[DSS] Created synthetic Team2 for import:', finalTeam2.players.join(', '));
         }
           if (finalTeam1 && finalTeam2) {
           const initialWinner = (winner === 'team1' || winner === 'team2') ? winner : null;
           const initialScore = Array.isArray(score) ? score : null;
           const candidate = { team1: finalTeam1, team2: finalTeam2, winner: initialWinner, score: initialScore, date: date || null, dateTime: dateTime || null, result: result || null, category: impRaw.category || null };
-          const candSig = matchSignature(candidate);
+          const candSig = _ku.matchSignature(candidate);
           const candParts = candSig.split('::');
           const candRelaxed = (candParts[0] || '') + '::' + (candParts[2] || '');
           if (existingSigs.has(candSig)) {
-            console.log('[DSS] Skipping push: candidate exact match already present in queue');
+            _log('[DSS] Skipping push: candidate exact match already present in queue');
           } else if (existingRelaxed.has(candRelaxed)) {
-            console.log('[DSS] Skipping push: candidate teams+score already present in queue (date mismatch)');
+            _log('[DSS] Skipping push: candidate teams+score already present in queue (date mismatch)');
           } else {
             matchQueue.push(candidate);
             existingSigs.add(candSig);
             existingRelaxed.add(candRelaxed);
             importedCount++;
           }
-          console.log(`[DSS] Imported winner: ${initialWinner ?? 'none'}, score=${initialScore ? initialScore.map(p => `${p[0]}-${p[1]}`).join(' ') : 'n/a'}`);
-          console.log(`[DSS] Imported winner: ${initialWinner ?? 'none'}`);
-          console.log(`[DSS] Pushed imported match: Team1=[${team1.join(", ")}], Team2=[${team2.join(", ")}], date=${date || '—'}${dateTime ? ` (${dateTime})` : ''}`);
+          _log(`[DSS] Imported winner: ${initialWinner ?? 'none'}, score=${initialScore ? initialScore.map(p => `${p[0]}-${p[1]}`).join(' ') : 'n/a'}`);
+          _log(`[DSS] Pushed imported match: Team1=[${team1.join(", ")}], Team2=[${team2.join(", ")}], date=${date || '—'}${dateTime ? ` (${dateTime})` : ''}`);
         }
   }
   })();
@@ -1723,7 +1737,7 @@ function getMatchTimestamp(m) {
       // When processing completes, render the updated queue, update UI and clear stored imports
       processPromise.then(() => {
         try {
-          console.log('[DSS] render after import: matchQueue length=', matchQueue.length, 'sample=', matchQueue.slice(0,3));
+          _log('[DSS] render after import: matchQueue length=', matchQueue.length, 'sample=', matchQueue.slice(0,3));
           renderMatches();
         } catch (e) { console.warn('[DSS] renderMatches after import failed', e); }
         // Update status element to show number of imported matches
@@ -1731,18 +1745,19 @@ function getMatchTimestamp(m) {
         if (status && importedCount > 0) {
           status.textContent = `Imported ${importedCount} match${importedCount === 1 ? "" : "es"} from schedule.`;
         }
-        console.log("[DSS] Imported matches added to match queue.");
+        _log("[DSS] Imported matches added to match queue.");
         // Optionally clear them after loading
         try { chrome.storage.local.remove("importedMatches"); } catch (e) { console.warn('[DSS] Failed to remove importedMatches', e); }
       }).catch(e => {
         console.warn('[DSS] processImported failed', e);
-        try { console.log('[DSS] render on failure: matchQueue length=', matchQueue.length); renderMatches(); } catch (e) {}
+        try { _log('[DSS] render on failure: matchQueue length=', matchQueue.length); renderMatches(); } catch (e) {}
         try { chrome.storage.local.remove("importedMatches"); } catch (e) {}
       });
     });
   }
 
   async function autoDetectGroupMatches() {
+    lastImportSource = 'local';
     setLoading(true, 'Detecting group matches…');
     try {
       // Wait for dynamic group links if the page loads them late
@@ -1786,14 +1801,19 @@ function getMatchTimestamp(m) {
         setLoading(false);
         return;
       }
-      console.log(`[DSS] [auto] Found ${groupLinks.length} group links.`);
+      _log(`[DSS] [auto] Found ${groupLinks.length} group links.`);
 
+      const totalGroups = groupLinks.length;
+      let groupIndex = 0;
       const allMatches = [];
       for (const a of groupLinks) {
         const url = toAbsUrl(a.getAttribute('href'));
         if (!url) continue;
+        groupIndex++;
+        const groupName = (a.textContent || '').trim() || `Group ${groupIndex}`;
+        setProgress(groupIndex, totalGroups, groupName, 'Group');
 
-        console.log(`[DSS] [auto] Fetching group page: ${url}`);
+        _log(`[DSS] [auto] Fetching group page: ${url}`);
         const resp = await fetch(url, { credentials: 'include' });
         if (!resp.ok) {
           console.warn(`[DSS] [auto] Failed to fetch ${url}`);
@@ -1811,13 +1831,13 @@ function getMatchTimestamp(m) {
             extracted.forEach(m => { try { if (!m.category) m.category = titleLabel; if (!m._source) m._source = url; } catch(e){} });
           }
         } catch (e) {}
-        console.log(`[DSS] [auto] Extracted ${extracted.length} matches from ${url}`);
+        _log(`[DSS] [auto] Extracted ${extracted.length} matches from ${url}`);
         if (!extracted || extracted.length === 0) {
-          console.log('[DSS] [auto] No matches via fetch. Trying iframe fallback for', url);
+          _log('[DSS] [auto] No matches via fetch. Trying iframe fallback for', url);
           const iframeDoc = await loadGroupPageViaIframe(url);
           if (iframeDoc) {
             extracted = extractMatchesFromDoc(iframeDoc);
-            console.log(`[DSS] [auto] Iframe extracted ${extracted.length} matches from ${url}`);
+            _log(`[DSS] [auto] Iframe extracted ${extracted.length} matches from ${url}`);
           } else {
             console.warn('[DSS] [auto] Iframe fallback returned no document for', url);
           }
@@ -1834,7 +1854,7 @@ function getMatchTimestamp(m) {
       }
 
       chrome.storage.local.set({ importedMatches: allMatches }, () => {
-        console.log(`[DSS] [auto] Stored ${allMatches.length} imported matches from groups.`);
+        _log(`[DSS] [auto] Stored ${allMatches.length} imported matches from groups.`);
         const status = document.getElementById('matchStatus');
         if (status) status.textContent = `Imported ${allMatches.length} matches from groups. Loading into panel...`;
         loadImportedMatches();
@@ -1848,28 +1868,14 @@ function getMatchTimestamp(m) {
     }
   }
 
-  // Helper: determine category type token from a category string
-  function categoryTokenFromText(txt) {
-    if (!txt) return null;
-    const s = txt.toUpperCase();
-    // Match explicit category tokens possibly followed by a number (e.g. DD5, GD10, DD-5)
-    // Accept separators like space or dash between token and number.
-    const m = s.match(/\b(GD|HD|DD|HE|DE)(?:\s*[-]?\s*\d+)?\b/);
-    if (m) return m[1];
-    // Sometimes the string contains words like 'dubbel' or 'single'
-    if (/\b(dubbel|doubles|double)\b/i.test(txt)) return 'D';
-    if (/\b(single|singles|enkel)\b/i.test(txt)) return 'S';
-    return null;
-  }
-
-  // Reprocess already-stored importedMatches to prefer draw/event sources over profile pages.
+// Reprocess already-stored importedMatches to prefer draw/event sources over profile pages.
   // Exposed as window.dssReprocessImportedMatches() for manual invocation.
   async function reprocessImportedMatches(opts = {}) {
     try {
-      console.log('[DSS] reprocessImportedMatches: starting');
+      _log('[DSS] reprocessImportedMatches: starting');
       chrome.storage.local.get(['importedMatches'], async (res) => {
         const imported = Array.isArray(res.importedMatches) ? res.importedMatches : [];
-        if (!imported.length) { console.log('[DSS] No importedMatches found to reprocess'); return; }
+        if (!imported.length) { _log('[DSS] No importedMatches found to reprocess'); return; }
         let changed = 0;
         const MAX_REFETCH = opts.max || 80;
         let refetchCount = 0;
@@ -1888,7 +1894,7 @@ function getMatchTimestamp(m) {
 
             if (refetchCount >= MAX_REFETCH) { console.warn('[DSS] reprocessImportedMatches: reached refetch cap'); break; }
             refetchCount++;
-            console.log('[DSS] reprocessImportedMatches: fetching profile', src);
+            _log('[DSS] reprocessImportedMatches: fetching profile', src);
             const resp = await fetch(src, { credentials: 'include' });
             if (!resp.ok) { console.warn('[DSS] profile fetch failed', src, resp.status); continue; }
             const html = await resp.text();
@@ -1901,7 +1907,7 @@ function getMatchTimestamp(m) {
                 const txt = (a.textContent || '').trim();
                 const href = a.getAttribute('href');
                 if (!href || !txt) continue;
-                const token = categoryTokenFromText(txt);
+                const token = _ku.categoryTokenFromText(txt);
                 if (!token) continue;
                 const targetHref = toAbsUrl(href);
                 if (!targetHref) continue;
@@ -1923,7 +1929,7 @@ function getMatchTimestamp(m) {
             const best = candidates[0];
             if (!best) continue;
             const normalizedTarget = (() => { try { return (new URL(best.href, window.location.href)).href; } catch(e){ return best.href; } })();
-            console.log('[DSS] reprocessImportedMatches: best candidate', best.txt, normalizedTarget, 'score=', best.score);
+            _log('[DSS] reprocessImportedMatches: best candidate', best.txt, normalizedTarget, 'score=', best.score);
             // fetch target page to extract title
             try {
               const pageResp = await fetch(normalizedTarget, { credentials: 'include' });
@@ -1938,7 +1944,7 @@ function getMatchTimestamp(m) {
                   m.categoryRaw = rawLabel;
                   m.category = compact;
                   changed++;
-                  console.log('[DSS] reprocessImportedMatches: updated match with category', compact, rawLabel);
+                  _log('[DSS] reprocessImportedMatches: updated match with category', compact, rawLabel);
                 } else if (best.txt) {
                   // fallback: use anchor text even if we couldn't fetch or parse target title
                   const compact2 = normalizeCategoryLabel(best.txt) || null;
@@ -1947,7 +1953,7 @@ function getMatchTimestamp(m) {
                     m.categoryRaw = best.txt;
                     m.category = compact2;
                     changed++;
-                    console.log('[DSS] reprocessImportedMatches: updated match (fallback) with category', compact2, best.txt);
+                    _log('[DSS] reprocessImportedMatches: updated match (fallback) with category', compact2, best.txt);
                   }
                 }
               }
@@ -1955,9 +1961,9 @@ function getMatchTimestamp(m) {
           } catch (e) { console.warn('[DSS] reprocessImportedMatches: per-match error', e); }
         }
         if (changed) {
-          chrome.storage.local.set({ importedMatches: imported }, () => { console.log('[DSS] reprocessImportedMatches: persisted', changed, 'updates to importedMatches'); });
+          chrome.storage.local.set({ importedMatches: imported }, () => { _log('[DSS] reprocessImportedMatches: persisted', changed, 'updates to importedMatches'); });
         } else {
-          console.log('[DSS] reprocessImportedMatches: no updates made');
+          _log('[DSS] reprocessImportedMatches: no updates made');
         }
       });
     } catch (e) { console.warn('[DSS] reprocessImportedMatches: unexpected error', e); }
@@ -2027,8 +2033,8 @@ function getMatchTimestamp(m) {
         const raw = valueEl.textContent.trim().replace(/\s+/g, '');
         const numeric = parseFloat(raw.replace(/[^\d,\.\-]/g, '').replace(',', '.'));
         if (isNaN(numeric)) return;
-        if (typeRaw.includes('single')) ratingsObj.single = numeric;
-        if (typeRaw.includes('double') && !typeRaw.includes('padel')) ratingsObj.double = numeric;
+        if (typeRaw.includes('single') || typeRaw.includes('enkel')) ratingsObj.single = numeric;
+        if ((typeRaw.includes('double') || typeRaw.includes('dubbel')) && !typeRaw.includes('padel')) ratingsObj.double = numeric;
         if (typeRaw.includes('padel')) ratingsObj.padel = numeric;
       });
 
@@ -2043,8 +2049,8 @@ function getMatchTimestamp(m) {
           const raw = valueEl.textContent.trim().replace(/\s+/g, '');
           const val = parseFloat(raw.replace(/[^\d,\.\-]/g, '').replace(',', '.'));
           if (isNaN(val)) return;
-          if (type.includes('single')) ratingsObj.single = val;
-          if (type.includes('double') && !type.includes('padel')) ratingsObj.double = val;
+          if (type.includes('single') || type.includes('enkel')) ratingsObj.single = val;
+          if ((type.includes('double') || type.includes('dubbel')) && !type.includes('padel')) ratingsObj.double = val;
           if (type.includes('padel')) ratingsObj.padel = val;
         });
       }
@@ -2062,7 +2068,8 @@ function getMatchTimestamp(m) {
 
   // Finds all similar categories for players on the current page and extracts matches
   async function findAllSimilarCategories() {
-    console.log('[DSS] findAllSimilarCategories: triggered');
+    lastImportSource = 'findAll';
+    _log('[DSS] findAllSimilarCategories: triggered');
     setLoading(true, 'Finding similar categories for players…');
     try {
       // Collect all player links on the current event page (table.ruler entries)
@@ -2079,7 +2086,7 @@ function getMatchTimestamp(m) {
           const u = new URL(abs, window.location.href);
           if (u.protocol !== 'http:' && u.protocol !== 'https:') {
             // skip mailto:, javascript:, tel:, etc.
-            console.log('[DSS] Skipping non-HTTP profile link:', abs);
+            _log('[DSS] Skipping non-HTTP profile link:', abs);
             return;
           }
           profileMap.set(u.href, text);
@@ -2088,7 +2095,7 @@ function getMatchTimestamp(m) {
         }
       });
 
-      console.log('[DSS] findAllSimilarCategories: profiles found=', profileMap.size);
+      _log('[DSS] findAllSimilarCategories: profiles found=', profileMap.size);
       if (!profileMap.size) {
         alert('No player profile links found on this page.');
         return;
@@ -2103,7 +2110,7 @@ function getMatchTimestamp(m) {
       if (window._dssFindAllRunning) {
         // Signal running process to stop; the running loop checks this flag periodically
         window._dssFindAllRunning = false;
-        console.log('[DSS] findAllSimilarCategories: cancellation requested (already running).');
+        _log('[DSS] findAllSimilarCategories: cancellation requested (already running).');
         setLoading(false);
         return;
       }
@@ -2161,10 +2168,79 @@ function getMatchTimestamp(m) {
   // links that map to the same match type. This avoids following a profile to a
   // singles category when the current page is doubles.
   const pageMatchType = (typeof detectMatchTypeFromPage === 'function') ? detectMatchTypeFromPage() : null;
-  console.log('[DSS] findAllSimilarCategories: pageMatchType=', pageMatchType);
+  _log('[DSS] findAllSimilarCategories: pageMatchType=', pageMatchType);
+
+  // Phase 0: always fetch the current event's own group pages as a guaranteed baseline.
+  // Profile-based discovery finds *additional* categories; this ensures the starting
+  // 15 (or however many) matches from the current draw are always included.
+  {
+    let baseGroupLinks = [];
+    const baseTables = document.querySelectorAll('table.ruler');
+    for (const table of baseTables) {
+      for (const row of table.querySelectorAll('tbody tr')) {
+        const tds = row.querySelectorAll('td');
+        if (tds.length >= 3 && /poule/i.test(tds[2].textContent || '')) {
+          const a = tds[0].querySelector('a[href]');
+          if (a) baseGroupLinks.push(a);
+        }
+      }
+    }
+    if (!baseGroupLinks.length) {
+      baseGroupLinks = Array.from(document.querySelectorAll('table.ruler a'))
+        .filter(a => /\bgroep\b/i.test((a.textContent || '').trim()));
+    }
+    const baseHrefSet = new Set();
+    baseGroupLinks = baseGroupLinks.filter(a => {
+      const href = toAbsUrl(a.getAttribute('href') || '');
+      if (!href || baseHrefSet.has(href)) return false;
+      baseHrefSet.add(href);
+      return true;
+    });
+    if (baseGroupLinks.length) {
+      const lmEl = document.getElementById('dss-loading-msg');
+      if (lmEl) lmEl.textContent = 'Fetching current event matches…';
+      setProgress(0, baseGroupLinks.length, '', 'Group');
+      for (let gi = 0; gi < baseGroupLinks.length; gi++) {
+        if (!window._dssFindAllRunning) break;
+        const a = baseGroupLinks[gi];
+        const url = toAbsUrl(a.getAttribute('href'));
+        if (!url) continue;
+        const groupName = (a.textContent || '').trim() || `Group ${gi + 1}`;
+        setProgress(gi + 1, baseGroupLinks.length, groupName, 'Group');
+        processedCategoryUrls.add(url);
+        discoveredCategoryUrls.add(url);
+        try {
+          const resp = await fetch(url, { credentials: 'include' });
+          if (!resp.ok) continue;
+          const html = await resp.text();
+          const gdoc = new DOMParser().parseFromString(html, 'text/html');
+          try {
+            const tl = (gdoc.querySelector('.page-subhead .media__title .nav-link__value') || gdoc.querySelector('.module__title .nav-link__value') || gdoc.querySelector('.module__title') || gdoc.querySelector('.media__title'))?.textContent?.trim() || (gdoc.title || '').trim();
+            if (tl) discoveredCategoryTitles[url] = tl;
+          } catch (e) {}
+          let extracted = extractMatchesFromDoc(gdoc);
+          if (!extracted || !extracted.length) {
+            const iframeDoc = await loadGroupPageViaIframe(url);
+            if (iframeDoc) extracted = extractMatchesFromDoc(iframeDoc);
+          }
+          for (const m of (extracted || [])) {
+            if (!m || !m.team1 || !m.team2) continue;
+            const t1 = Array.isArray(m.team1) ? m.team1 : (m.team1.players || []);
+            const t2 = Array.isArray(m.team2) ? m.team2 : (m.team2.players || []);
+            if (!t1.length || !t2.length) continue;
+            collectedMatches.push({ date: m.date || null, dateTime: m.dateTime || null, team1: t1, team2: t2, winner: m.winner || null, score: Array.isArray(m.score) ? m.score : null, result: m.result || null, _playerProfiles: {}, _source: url });
+          }
+          _log(`[DSS] findAll baseline: fetched ${extracted ? extracted.length : 0} matches from ${url}`);
+        } catch (e) { console.warn('[DSS] findAll baseline group fetch failed', url, e); }
+      }
+      _log(`[DSS] findAll baseline: collectedMatches after group phase = ${collectedMatches.length}`);
+    }
+  }
 
   // Convert profileMap to an array for controlled parallel processing
       const profileEntries = Array.from(profileMap.entries());
+      let profilesDone = 0;
+      setProgress(0, profileEntries.length, '', 'Profile');
 
       // Process profiles in parallel with moderate concurrency. Each mapper returns an array of candidate category anchors to follow.
       const profileMappers = await mapWithConcurrency(profileEntries, async ([profileUrl, playerName]) => {
@@ -2173,8 +2249,10 @@ function getMatchTimestamp(m) {
         if (categoryFetchCount >= MAX_CATEGORY_FETCHES) return null;
         if (processedProfileUrls.has(profileUrl)) return null;
         processedProfileUrls.add(profileUrl);
+        profilesDone++;
+        setProgress(profilesDone, profileEntries.length, playerName, 'Profile');
         try {
-          console.log('[DSS] Fetching profile for', playerName, profileUrl);
+          _log('[DSS] Fetching profile for', playerName, profileUrl);
           const resp = await fetch(profileUrl, { credentials: 'include' });
           if (!resp.ok) { console.warn('[DSS] Profile fetch not OK', profileUrl, resp.status); return null; }
           const html = await resp.text();
@@ -2184,7 +2262,7 @@ function getMatchTimestamp(m) {
           // Heuristic: find links that look like category/event pages.
           const anchors = Array.from(doc.querySelectorAll('a')).filter(a => (a.textContent || '').trim());
           // Determine the current event token roughly from page
-          const currentToken = categoryTokenFromText(document.title || document.querySelector('.page-subhead .media__title .nav-link__value')?.textContent || '');
+          const currentToken = _ku.categoryTokenFromText(document.title || document.querySelector('.page-subhead .media__title .nav-link__value')?.textContent || '');
 
           const candidates = [];
           for (const a of anchors) {
@@ -2192,7 +2270,7 @@ function getMatchTimestamp(m) {
               const txt = (a.textContent || '').trim();
               const href = a.getAttribute('href');
               if (!href || !txt) continue;
-              const token = categoryTokenFromText(txt);
+              const token = _ku.categoryTokenFromText(txt);
               if (!token) continue; // only follow anchors that contain a category token
               const targetHref = toAbsUrl(href);
               if (!targetHref) continue;
@@ -2258,24 +2336,30 @@ function getMatchTimestamp(m) {
         });
         uniqueCategoryLinks = kept;
         const after = uniqueCategoryLinks.length;
-        try { console.log('[DSS] findAllSimilarCategories: filtered category links - before=', before, 'after=', after, 'kept_sample=', kept.slice(0,10).map(x=>x.href), 'dropped_sample=', dropped.slice(0,8).map(d=>({href: d.c && d.c.href, reason: d.reason, token: d.token, mapped: d.mapped}))); } catch(e){}
+        try { _log('[DSS] findAllSimilarCategories: filtered category links - before=', before, 'after=', after, 'kept_sample=', kept.slice(0,10).map(x=>x.href), 'dropped_sample=', dropped.slice(0,8).map(d=>({href: d.c && d.c.href, reason: d.reason, token: d.token, mapped: d.mapped}))); } catch(e){}
       } catch (e) { console.warn('[DSS] findAllSimilarCategories: error filtering category links', e); }
 
   // Debug: log the candidate category links order so we can detect non-deterministic variations
-  try { console.log('[DSS] findAllSimilarCategories: uniqueCategoryLinks (count=', uniqueCategoryLinks.length, '):', uniqueCategoryLinks.map(c=>c.href).slice(0,60)); } catch(e){}
+  try { _log('[DSS] findAllSimilarCategories: uniqueCategoryLinks (count=', uniqueCategoryLinks.length, '):', uniqueCategoryLinks.map(c=>c.href).slice(0,60)); } catch(e){}
   // Now fetch category pages in parallel (bounded concurrency) and process extraction logic
   const categoryEntries = uniqueCategoryLinks;
+      const lmEl = document.getElementById('dss-loading-msg');
+      if (lmEl) lmEl.textContent = 'Scanning category pages…';
+      let catsDone = 0;
+      setProgress(0, categoryEntries.length, '', 'Category');
       const categoryResults = await mapWithConcurrency(categoryEntries, async (entry) => {
         const targetHref = entry.href;
         const txt = entry.txt;
         const token = entry.token;
-        console.log('[DSS] candidate category link:', txt, '->', targetHref, 'token=', token);
+        _log('[DSS] candidate category link:', txt, '->', targetHref, 'token=', token);
         discoveredCategoryAnchors[targetHref] = discoveredCategoryAnchors[targetHref] || txt;
+        catsDone++;
+        setProgress(catsDone, categoryEntries.length, txt || targetHref, 'Category');
         try {
-          if (processedCategoryUrls.has(targetHref)) { console.log('[DSS] Skipping already-processed category', targetHref); return null; }
+          if (processedCategoryUrls.has(targetHref)) { _log('[DSS] Skipping already-processed category', targetHref); return null; }
           if (categoryFetchCount >= MAX_CATEGORY_FETCHES) { console.warn('[DSS] MAX_CATEGORY_FETCHES reached; skipping', targetHref); return null; }
-          if (!window._dssFindAllRunning) { console.log('[DSS] findAllSimilarCategories: aborted by user before fetching', targetHref); return null; }
-          console.log('[DSS] Fetching category page', targetHref);
+          if (!window._dssFindAllRunning) { _log('[DSS] findAllSimilarCategories: aborted by user before fetching', targetHref); return null; }
+          _log('[DSS] Fetching category page', targetHref);
           const pageResp = await fetch(targetHref, { credentials: 'include' });
           if (!pageResp.ok) { console.warn('[DSS] Category fetch not OK', targetHref, pageResp.status); processedCategoryUrls.add(targetHref); return null; }
           const pageHtml = await pageResp.text();
@@ -2283,6 +2367,35 @@ function getMatchTimestamp(m) {
           try { const titleLabel = (pdoc.querySelector('.page-subhead .media__title .nav-link__value') || pdoc.querySelector('.module__title .nav-link__value') || pdoc.querySelector('.module__title') || pdoc.querySelector('.media__title'))?.textContent?.trim() || (pdoc.title || '').trim(); if (titleLabel) discoveredCategoryTitles[targetHref] = titleLabel; } catch (e) {}
           let extracted = [];
           try { extracted = extractMatchesFromDoc(pdoc); } catch (e) { console.warn('[DSS] extractMatchesFromDoc error', e); }
+
+          // If the fetched page looks like an event overview (0 matches but has Groep sub-links),
+          // follow those sub-links one level deeper to get actual match data.
+          if (!extracted || extracted.length === 0) {
+            try {
+              const subGroupLinks = Array.from(pdoc.querySelectorAll('table.ruler a, a[href]'))
+                .filter(a => /\bgroep\b/i.test((a.textContent || '').trim()));
+              const subSeen = new Set();
+              for (const sga of subGroupLinks.slice(0, 8)) {
+                const subUrl = toAbsUrl(sga.getAttribute('href'));
+                if (!subUrl || subSeen.has(subUrl) || processedCategoryUrls.has(subUrl)) continue;
+                subSeen.add(subUrl);
+                processedCategoryUrls.add(subUrl);
+                discoveredCategoryUrls.add(subUrl);
+                try {
+                  const sr = await fetch(subUrl, { credentials: 'include' });
+                  if (!sr.ok) continue;
+                  const sh = await sr.text();
+                  const sdoc = new DOMParser().parseFromString(sh, 'text/html');
+                  const subExtracted = extractMatchesFromDoc(sdoc);
+                  if (subExtracted && subExtracted.length) {
+                    extracted = [...extracted, ...subExtracted];
+                    _log(`[DSS] findAll sub-group: got ${subExtracted.length} matches from ${subUrl}`);
+                  }
+                } catch (e) { /* ignore per-sub-group errors */ }
+              }
+            } catch (e) { console.warn('[DSS] sub-group follow failed', e); }
+          }
+
           try {
             let ev = extractRatingsFromEventDoc(pdoc);
             if ((!ev || (!Object.keys(ev.profiles||{}).length && !Object.keys(ev.ratings||{}).length))) {
@@ -2291,7 +2404,7 @@ function getMatchTimestamp(m) {
                 if (possibleEventAnchor) {
                   const evHref = toAbsUrl(possibleEventAnchor.getAttribute('href'));
                   if (evHref && !processedCategoryUrls.has(evHref)) {
-                    console.log('[DSS] No event-level ratings on category page; fetching event overview', evHref);
+                    _log('[DSS] No event-level ratings on category page; fetching event overview', evHref);
                     const evResp = await fetch(evHref, { credentials: 'include' });
                     if (evResp && evResp.ok) {
                       const evHtml = await evResp.text();
@@ -2319,7 +2432,7 @@ function getMatchTimestamp(m) {
 
           const needsIframeFallback = (!extracted || extracted.length === 0) || (Array.isArray(extracted) && extracted.some(m => !m.result));
           if (needsIframeFallback) {
-            console.log('[DSS] fetch-extracted matches missing or lacking result flags; trying iframe for', targetHref);
+            _log('[DSS] fetch-extracted matches missing or lacking result flags; trying iframe for', targetHref);
             try {
               const iframeDoc = await loadGroupPageViaIframe(targetHref);
               if (iframeDoc) {
@@ -2335,11 +2448,11 @@ function getMatchTimestamp(m) {
                     });
                   }
                 } catch (e) { console.warn('[DSS] iframe event-level rating merge failed', e); }
-                if (iframeExtracted && iframeExtracted.length) { extracted = iframeExtracted; console.log('[DSS] Iframe extracted', extracted.length, 'matches from', targetHref); } else { console.log('[DSS] Iframe extracted 0 matches from', targetHref); }
+                if (iframeExtracted && iframeExtracted.length) { extracted = iframeExtracted; _log('[DSS] Iframe extracted', extracted.length, 'matches from', targetHref); } else { _log('[DSS] Iframe extracted 0 matches from', targetHref); }
               }
             } catch (e) { console.warn('[DSS] iframe fallback failed for', targetHref, e); }
           } else {
-            console.log('[DSS] Extracted', extracted.length, 'matches from', targetHref);
+            _log('[DSS] Extracted', extracted.length, 'matches from', targetHref);
           }
 
           try { processedCategoryUrls.add(targetHref); } catch (e) {}
@@ -2384,7 +2497,7 @@ function getMatchTimestamp(m) {
         return !containsPlaceholder(m.team1) && !containsPlaceholder(m.team2);
       });
       if (placeholderFiltered.length !== collectedMatches.length) {
-        console.log('[DSS] findAllSimilarCategories: Dropped', (collectedMatches.length - placeholderFiltered.length), 'matches containing placeholders (Groep/Bye).');
+        _log('[DSS] findAllSimilarCategories: Dropped', (collectedMatches.length - placeholderFiltered.length), 'matches containing placeholders (Groep/Bye).');
       }
       collectedMatches.length = 0;
       collectedMatches.push(...placeholderFiltered);
@@ -2394,7 +2507,7 @@ function getMatchTimestamp(m) {
         const uniq = [];
         const seen = new Set();
         collectedMatches.forEach(m => {
-          const sig = matchSignature(m);
+          const sig = _ku.matchSignature(m);
           if (!seen.has(sig)) { seen.add(sig); uniq.push(m); }
         });
                   const toStore = uniq;
@@ -2456,12 +2569,12 @@ function getMatchTimestamp(m) {
             // fallback to null
             const rawLabel = chosenRaw || null;
             const compact = rawLabel ? (normalizeCategoryLabel(rawLabel) || null) : null;
-            try { console.log('[DSS] enhancing match: chosenRaw=', rawLabel, 'compact=', compact, 'candidates=', candidates); } catch(e){}
+            try { _log('[DSS] enhancing match: chosenRaw=', rawLabel, 'compact=', compact, 'candidates=', candidates); } catch(e){}
             return { ...m, _playerProfiles: existing, category: compact, categoryRaw: rawLabel };
           });
           // Persist both enhanced matches and the discovered profiles/ratings cache so the importer can consult them
           chrome.storage.local.set({ importedMatches: enhanced, importedProfilesCache: { profiles: discoveredProfiles, ratings: discoveredRatings } }, () => {
-            console.log(`[DSS] findAllSimilarCategories: Stored ${enhanced.length} extracted matches to storage.importedMatches (${collectedMatches.length} before dedupe).`);
+            _log(`[DSS] findAllSimilarCategories: Stored ${enhanced.length} extracted matches to storage.importedMatches (${collectedMatches.length} before dedupe).`);
             const status = document.getElementById('matchStatus');
             if (status) {
               status.textContent = `Found ${enhanced.length} matches. Loading into the panel...`;
@@ -2471,7 +2584,7 @@ function getMatchTimestamp(m) {
         } catch (e) {
           console.warn('[DSS] findAllSimilarCategories: Failed to store importedMatches', e);
         }
-        console.log('[DSS] findAllSimilarCategories: processed', processedProfileUrls.size, 'profiles, fetched', discoveredCategoryUrls.size, 'unique categories (categoryFetchCount=', categoryFetchCount, ').');
+        _log('[DSS] findAllSimilarCategories: processed', processedProfileUrls.size, 'profiles, fetched', discoveredCategoryUrls.size, 'unique categories (categoryFetchCount=', categoryFetchCount, ').');
       } else {
         const status = document.getElementById('matchStatus');
         if (status) status.textContent = 'No similar-category matches found for players.';
@@ -2492,6 +2605,26 @@ function getMatchTimestamp(m) {
     return document.querySelector("table.ruler") !== null;
   }
 
+  function injectCategoryOverviewButtons() {
+    const links = document.querySelectorAll('div.module__content ul > li > h4 > span > a[href]');
+    links.forEach(a => {
+      if (a.dataset.dssOverviewBtn) return;
+      a.dataset.dssOverviewBtn = '1';
+      const btn = document.createElement('button');
+      btn.className = 'dss-cat-overview-btn';
+      btn.textContent = 'Go to overview';
+      btn.title = a.href;
+      btn.style.cssText = 'margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;border-radius:4px;background:#193291;color:#fff;border:none;cursor:pointer;vertical-align:middle;line-height:1.6;white-space:nowrap;';
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const linkText = a.textContent.trim();
+        goToOverviewForCurrentEvent({ rawTitle: linkText, eventType: normalizeEventTitle(linkText), tournamentHref: a.href });
+      };
+      a.after(btn);
+    });
+  }
+
   function init() {
     extractTeamsFromTable();
     if (isRatingsPage()) {
@@ -2502,6 +2635,8 @@ function getMatchTimestamp(m) {
     }
     // Ensure the main page banner (upcoming match) has a Go to overview button when visible
     try { addGoToOverviewMainBanner(); } catch (e) {}
+    try { addRatingShortcut(); } catch (e) {}
+    try { injectCategoryOverviewButtons(); } catch (e) {}
   }
 
   if (document.readyState === "loading") {
@@ -2527,6 +2662,15 @@ function getMatchTimestamp(m) {
       }
     });
     bannerObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  // Observe for dynamically loaded schedule content and inject category overview buttons
+  try {
+    let _catBtnTimer = null;
+    const catObserver = new MutationObserver(() => {
+      clearTimeout(_catBtnTimer);
+      _catBtnTimer = setTimeout(() => { try { injectCategoryOverviewButtons(); } catch (e) {} }, 250);
+    });
+    catObserver.observe(document.body, { childList: true, subtree: true });
   } catch (e) {}
 // ---- MATCH SCHEDULE PAGE ("Wedstrijden") SUPPORT ----
 
@@ -2579,7 +2723,7 @@ function parseWinnerFromMatchEl(matchEl) {
             else if (hasNums) {
               if (n1 > n2) s1++; else if (n2 > n1) s2++;
             }
-            try { console.log(`[DSS] parseWinner: set #${idx+1}: n1=${n1} n2=${n2} flags c1Won=${c1Won} c2Won=${c2Won}`); } catch {}
+            try { _log(`[DSS] parseWinner: set #${idx+1}: n1=${n1} n2=${n2} flags c1Won=${c1Won} c2Won=${c2Won}`); } catch {}
           }
         });
       }
@@ -2589,7 +2733,7 @@ function parseWinnerFromMatchEl(matchEl) {
         const txt = (resultEl.textContent || '').replace(/\s+/g, ' ');
         const pairs = Array.from(txt.matchAll(/(\d{1,2})\s*[-–]\s*(\d{1,2})/g)).map(m => [parseInt(m[1],10), parseInt(m[2],10)]);
         if (pairs.length) {
-          pairs.forEach(([a,b], i) => { if (a>b) s1++; else if (b>a) s2++; console.log(`[DSS] parseWinner: text pair #${i+1}: ${a}-${b}`); });
+          pairs.forEach(([a,b], i) => { if (a>b) s1++; else if (b>a) s2++; _log(`[DSS] parseWinner: text pair #${i+1}: ${a}-${b}`); });
           setScores = pairs.slice();
         }
       }
@@ -2601,7 +2745,7 @@ function parseWinnerFromMatchEl(matchEl) {
       }
     }
   } catch (e) {
-    try { console.log('[DSS] parseWinner: exception in score-based parsing', e); } catch {}
+    try { _log('[DSS] parseWinner: exception in score-based parsing', e); } catch {}
   }
 
   // Decide final winner preference: score > class > null
@@ -2621,10 +2765,10 @@ function parseWinnerFromMatchEl(matchEl) {
         const mtxt = (messageEl.textContent || '').trim();
         if (mtxt && walkRegex.test(mtxt)) {
           resultFlag = 'walkover';
-          console.log('[DSS] parseWinner: detected walkover via .match__message text=', mtxt);
+          _log('[DSS] parseWinner: detected walkover via .match__message text=', mtxt);
         } else if (mtxt && opgaveRegex.test(mtxt)) {
           resultFlag = 'opgave';
-          console.log('[DSS] parseWinner: detected opgave via .match__message text=', mtxt);
+          _log('[DSS] parseWinner: detected opgave via .match__message text=', mtxt);
         }
       }
     } catch (e) {}
@@ -2636,8 +2780,8 @@ function parseWinnerFromMatchEl(matchEl) {
       if (statusEl && !resultFlag) {
         const st = (statusEl.textContent || '').trim();
         if (st && st.length >= 2) {
-          if (walkRegex.test(st)) { resultFlag = 'walkover'; console.log('[DSS] parseWinner: detected walkover via .match__status token=', st); }
-          else if (opgaveRegex.test(st)) { resultFlag = 'opgave'; console.log('[DSS] parseWinner: detected opgave via .match__status token=', st); }
+          if (walkRegex.test(st)) { resultFlag = 'walkover'; _log('[DSS] parseWinner: detected walkover via .match__status token=', st); }
+          else if (opgaveRegex.test(st)) { resultFlag = 'opgave'; _log('[DSS] parseWinner: detected opgave via .match__status token=', st); }
         }
       }
     } catch (e) {}
@@ -2670,21 +2814,21 @@ function parseWinnerFromMatchEl(matchEl) {
       const combined = parts.filter(Boolean).join(' | ').trim();
       if (!resultFlag && combined) {
         // Prefer full-word matches first
-        if (walkRegex.test(combined)) { resultFlag = 'walkover'; console.log('[DSS] parseWinner: detected walkover in combined text=', combined.slice(0,300)); }
-        else if (opgaveRegex.test(combined)) { resultFlag = 'opgave'; console.log('[DSS] parseWinner: detected opgave in combined text=', combined.slice(0,300)); }
+        if (walkRegex.test(combined)) { resultFlag = 'walkover'; _log('[DSS] parseWinner: detected walkover in combined text=', combined.slice(0,300)); }
+        else if (opgaveRegex.test(combined)) { resultFlag = 'opgave'; _log('[DSS] parseWinner: detected opgave in combined text=', combined.slice(0,300)); }
         else {
           // If no full-word match, check for short multi-letter tokens inside the result/text nodes (e.g., 'WO', 'OPG')
           const shortToken = (resultEl && (resultEl.textContent || '').trim()) || '';
           if (shortToken && shortToken.length >= 2 && /^(wo|opg|w\.o\.|w\/o)$/i.test(shortToken)) {
-            if (/^(wo|w\.o\.|w\/o)$/i.test(shortToken)) { resultFlag = 'walkover'; console.log('[DSS] parseWinner: interpreted multi-letter shortToken as walkover=', shortToken); }
-            else if (/^opg/i.test(shortToken)) { resultFlag = 'opgave'; console.log('[DSS] parseWinner: interpreted multi-letter shortToken as opgave=', shortToken); }
+            if (/^(wo|w\.o\.|w\/o)$/i.test(shortToken)) { resultFlag = 'walkover'; _log('[DSS] parseWinner: interpreted multi-letter shortToken as walkover=', shortToken); }
+            else if (/^opg/i.test(shortToken)) { resultFlag = 'opgave'; _log('[DSS] parseWinner: interpreted multi-letter shortToken as opgave=', shortToken); }
           }
         }
       }
 
       if (!resultFlag && resultEl) {
-        try { console.log('[DSS] parseWinner: no special-result token found; resultEl sample=', (resultEl.textContent||'').trim().slice(0,120)); } catch (e) {}
-        try { const outer = resultEl.outerHTML ? resultEl.outerHTML.slice(0,600) : '[no outerHTML]'; console.log('[DSS] parseWinner: resultEl outerHTML sample=', outer); } catch (e) {}
+        try { _log('[DSS] parseWinner: no special-result token found; resultEl sample=', (resultEl.textContent||'').trim().slice(0,120)); } catch (e) {}
+        try { const outer = resultEl.outerHTML ? resultEl.outerHTML.slice(0,600) : '[no outerHTML]'; _log('[DSS] parseWinner: resultEl outerHTML sample=', outer); } catch (e) {}
       }
     } catch (e) {}
 
@@ -2692,7 +2836,7 @@ function parseWinnerFromMatchEl(matchEl) {
     try {
       if (!resultFlag && (!setScores || setScores.length === 0)) {
         const snippet = (matchEl && (matchEl.textContent || '')) ? (matchEl.textContent || '').trim().slice(0,300) : '';
-        try { console.log('[DSS] parseWinner: NO result flag and NO numeric score parsed; match snippet=', snippet); } catch(e) {}
+        try { _log('[DSS] parseWinner: NO result flag and NO numeric score parsed; match snippet=', snippet); } catch(e) {}
       }
     } catch (e) {}
   } catch (e) {}
@@ -2703,7 +2847,7 @@ function parseWinnerFromMatchEl(matchEl) {
 function extractMatchesFromDoc(doc) {
   const matches = [];
   const matchEls = doc.querySelectorAll('.match-group .match');
-  console.log(`[DSS] [auto] Found ${matchEls.length} match elements in fetched group page.`);
+  _log(`[DSS] [auto] Found ${matchEls.length} match elements in fetched group page.`);
   matchEls.forEach(matchEl => {
     const rows = matchEl.querySelectorAll('.match__row-title');
     if (rows.length !== 2) return;
@@ -2743,6 +2887,17 @@ function extractMatchesFromDoc(doc) {
     const team2 = extractTeam(rows[1]);
     if (!team1.length || !team2.length) return;
 
+    // Skip placeholder/Bye entries (e.g. team name is literally "Bye" or "Groep #1")
+    const isPlaceholderTeam = (names) => names.some(n => {
+      if (!n) return false;
+      const nn = normalizeName(String(n));
+      return /\b(bye|groep|groepa|groepb|groepc|groeppoule)\b/.test(nn) || /^groep\s*#?\d+/.test(nn);
+    });
+    if (isPlaceholderTeam(team1) || isPlaceholderTeam(team2)) {
+      _log('[DSS] extractMatchesFromDoc: skipping placeholder match', team1, team2);
+      return;
+    }
+
     let matchDate = null;
     let node = matchEl;
     while ((node = node.previousElementSibling)) {
@@ -2769,7 +2924,7 @@ function extractMatchesFromDoc(doc) {
   const winner = parsed.winner;
   const score = parsed.score;
   const resultFlag = parsed.result || null;
-    console.log('[DSS] [auto] Parsed score array:', score);
+    _log('[DSS] [auto] Parsed score array:', score);
   // Attempt to infer a nearby category/title for this individual match element
   let localCategoryRaw = null;
   try {
@@ -2787,7 +2942,7 @@ function extractMatchesFromDoc(doc) {
           const nav = sib.querySelector && (sib.querySelector('.nav-link__value') || sib.querySelector('.module__title') || sib.querySelector('.media__title'));
           if (nav && (nav.textContent || '').trim()) { localCategoryRaw = nav.textContent.trim(); break; }
           const t = (sib.textContent || '').trim();
-          if (t && categoryTokenFromText(t)) { localCategoryRaw = t; break; }
+          if (t && _ku.categoryTokenFromText(t)) { localCategoryRaw = t; break; }
         } catch (e) {}
         sib = sib.previousElementSibling;
       }
@@ -2800,10 +2955,10 @@ function extractMatchesFromDoc(doc) {
       matchObj._playerProfiles = { ...profileMap };
       if (Object.keys(profileRatings).length) matchObj._playerProfiles.__ratings = { ...profileRatings };
     }
-    try { console.log('[DSS] extractMatchesFromDoc: match', { team1, team2, localCategoryRaw, profileMap: Object.keys(profileMap).length ? Object.fromEntries(Object.entries(profileMap).slice(0,6)) : {}, profileRatings: Object.keys(profileRatings).length ? profileRatings : {} }); } catch(e){}
+    try { _log('[DSS] extractMatchesFromDoc: match', { team1, team2, localCategoryRaw, profileMap: Object.keys(profileMap).length ? Object.fromEntries(Object.entries(profileMap).slice(0,6)) : {}, profileRatings: Object.keys(profileRatings).length ? profileRatings : {} }); } catch(e){}
     matches.push(matchObj);
     if (resultFlag) {
-      try { console.log('[DSS] extractMatchesFromDoc: pushing match with special result', resultFlag, 'Team1=', team1.join(', '), 'Team2=', team2.join(', ')); } catch(e){}
+      try { _log('[DSS] extractMatchesFromDoc: pushing match with special result', resultFlag, 'Team1=', team1.join(', '), 'Team2=', team2.join(', ')); } catch(e){}
     }
   });
   return matches;
@@ -2942,7 +3097,7 @@ async function goToOverviewForCurrentEvent(override) {
     const tourCandidate = forcedTourHref || (topTournamentAnchor ? toAbsUrl(topTournamentAnchor.getAttribute('href')) : null);
     if (tourCandidate) {
       try {
-        console.log('[DSS] goToOverview: fetching tournament page to locate Onderdelen', tourCandidate);
+        _log('[DSS] goToOverview: fetching tournament page to locate Onderdelen', tourCandidate);
         const tourDoc = await fetchDoc(tourCandidate);
         if (tourDoc) {
           // look for onderdelen link inside the tournament page
@@ -3202,8 +3357,35 @@ function addGoToOverviewMainBanner() {
   }
 }
 
+function addRatingShortcut() {
+  try {
+    if (document.getElementById('knltb-rating-shortcut')) return;
+    // Find "Mijn prestaties" link → player profile URL
+    const prestatiesLink = Array.from(document.querySelectorAll('.module__aside a[href*="/player-profile/"]'))
+      .find(a => /mijn\s*prestaties/i.test(a.textContent));
+    // Fallback: player name link in the hero media section
+    const heroLink = document.querySelector('div.media--hero.media div.media__content h5 a[href*="/player-profile/"]');
+    const sourceLink = prestatiesLink || heroLink;
+    if (!sourceLink) return;
+    const profileHref = sourceLink.getAttribute('href');
+    if (!profileHref) return;
+    const aside = sourceLink.closest('.module__aside') || document.querySelector('.module__banner .module__aside');
+    if (!aside) return;
+    const ratingHref = toAbsUrl(profileHref.replace(/\/$/, '') + '/Rating');
+    const ratingLink = document.createElement('a');
+    ratingLink.id = 'knltb-rating-shortcut';
+    ratingLink.href = ratingHref;
+    ratingLink.className = 'btn btn--primary nav-link';
+    ratingLink.style.marginLeft = '0.75rem';
+    ratingLink.innerHTML = '<span class="nav-link__value">Rating</span>';
+    aside.appendChild(ratingLink);
+  } catch (e) {
+    console.warn('[DSS] addRatingShortcut failed', e);
+  }
+}
+
 if (isMatchSchedulePage()) {
-  console.log('[DSS] Match schedule page detected');
+  _log('[DSS] Match schedule page detected');
   addGoToOverviewButton();
 }
 

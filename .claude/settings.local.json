@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\\\\pages\\\\draw.js\")"
+    ]
+  }
+}

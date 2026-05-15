@@ -696,20 +696,25 @@
       width: '420px'
     });
 
-    const importBtn = document.createElement("button");
-    importBtn.textContent = "📥 Import Season";
+    const btnRow = document.createElement('div');
+    btnRow.style.display = 'flex';
+    btnRow.style.gap = '8px';
+    btnRow.style.flexWrap = 'wrap';
+
+    const importBtn = window.KNLTBPanel.createButton('📥 Import Season', 'Import matches from this season', {
+      background: '#193291', color: '#fff'
+    });
     importBtn.onclick = () => {
       setStatus("⏳ Importing season… this may take a few seconds.");
       expandAllDetails(parseSeasonMatches);
     };
 
-    const processBtn = document.createElement("button");
-    processBtn.textContent = "📊 Show Rating Chart";
-    processBtn.style.marginLeft = "10px";
+    const processBtn = window.KNLTBPanel.createButton('📊 Show Rating Chart', 'Render the rating chart');
     processBtn.onclick = processMatches;
 
-    contentWrap.appendChild(importBtn);
-    contentWrap.appendChild(processBtn);
+    btnRow.appendChild(importBtn);
+    btnRow.appendChild(processBtn);
+    contentWrap.appendChild(btnRow);
     const status = document.createElement("div");
     status.id = "knltbStatus";
     status.style.marginTop = "8px";

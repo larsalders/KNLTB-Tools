@@ -24,8 +24,7 @@
 
   function parseLocaleFloat(text) {
     if (text === undefined || text === null) return NaN;
-    const normalized = String(text).replace(',', '.').replace(/[^
-0-9.\-]/g, '');
+    const normalized = String(text).replace(',', '.').replace(/[^0-9.\-]/g, '');
     return parseFloat(normalized);
   }
 
