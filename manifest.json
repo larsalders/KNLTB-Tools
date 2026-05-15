@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "KNLTB Tools",
+  "version": "1.0",
+  "description": "Adds interactive elements to various KNLTB pages to allow for faster and more realistic rating calculations and visualizations.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://mijnknltb.toernooi.nl/*"
+  ],
+  "action": {
+    "default_icon": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://mijnknltb.toernooi.nl/player-profile/*/Rating"],
+      "js": [
+        "profile-rating.js",
+        "lib/chart.min.js",
+        "lib/chartjs-adapter-date-fns.bundle.min.js"
+      ]
+    },
+    {
+      "matches": ["*://mijnknltb.toernooi.nl/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
