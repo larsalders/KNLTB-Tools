@@ -18,14 +18,20 @@
     {
       "matches": ["*://mijnknltb.toernooi.nl/player-profile/*/Rating"],
       "js": [
-        "profile-rating.js",
+        "shared/knltb-utils.js",
+        "shared/ui-panel.js",
+        "pages/player-profile.js",
         "lib/chart.min.js",
         "lib/chartjs-adapter-date-fns.bundle.min.js"
       ]
     },
     {
       "matches": ["*://mijnknltb.toernooi.nl/*"],
-      "js": ["content.js"],
+      "js": [
+        "shared/knltb-utils.js",
+        "shared/ui-panel.js",
+        "pages/draw.js"
+      ],
       "run_at": "document_idle"
     }
   ]

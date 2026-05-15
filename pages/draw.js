@@ -1,13 +1,12 @@
 (function () {
   // Existing rating calculation logic remains intact
-  function normalizeName(name) {
-    return name
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, " ")
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
-      .replace(/[-'.,]/g, ""); // Remove punctuation
-  }
+  const normalizeName = (name) => {
+    if (window.KNLTBUtils && typeof window.KNLTBUtils.normalizeName === 'function') {
+      return window.KNLTBUtils.normalizeName(name);
+    }
+    if (typeof name !== 'string') return '';
+    return name.toLowerCase().trim().replace(/\s+/g, " ");
+  };
 
   function calculateTeamRatingImpact(r1, r2, r3, r4) {
     const K = 0.275;
@@ -49,6 +48,27 @@
 
   // Track which players' ratings changed in the last refresh
   let dssLastChangedPlayers = new Set();
+  let dssPanel = null;
+
+  function autoResizePanel(panel) {
+    if (!panel || !(panel instanceof HTMLElement)) return;
+    try {
+      panel.style.width = 'auto';
+      panel.style.height = 'auto';
+      const minWidth = 340;
+      const minHeight = 160;
+      const maxWidth = Math.max(window.innerWidth - 40, minWidth);
+      const maxHeight = Math.max(window.innerHeight - 40, minHeight);
+      const table = panel.querySelector('#matchList');
+      const contentWidth = table && table.scrollWidth ? table.scrollWidth + 40 : panel.scrollWidth;
+      const width = Math.min(Math.max(contentWidth, minWidth), maxWidth);
+      const height = Math.min(Math.max(panel.scrollHeight, minHeight), maxHeight);
+      panel.style.width = `${width}px`;
+      panel.style.height = `${height}px`;
+    } catch (e) {
+      console.warn('[DSS] autoResizePanel failed', e);
+    }
+  }
 
   // --- Loading UI helpers ---
 let dssSpinnerStylesInjected = false;
@@ -118,11 +138,11 @@ function ensureSpinnerStyles() {
         font-size: 13px; 
       }
       .dss-panel .dss-table-wrap { 
-        overflow-x: auto; 
-        -webkit-overflow-scrolling: touch; 
+        overflow-x: visible; 
       }
       .dss-panel .dss-table-wrap table { 
-        min-width: 560px; /* avoid overly cramped columns */
+        width: 100%;
+        min-width: 0;
       }
       /* Make click targets a bit larger */
       .dss-panel td button { 
@@ -271,13 +291,19 @@ function setLoading(isLoading, message = "") {
     // Removed call to populatePlayerDropdown() from here
   }
 
-  function toAbsUrl(url) {
+  const toAbsUrl = (url) => {
+    if (window.KNLTBUtils && typeof window.KNLTBUtils.toAbsUrl === 'function') {
+      return window.KNLTBUtils.toAbsUrl(url);
+    }
     if (!url) return null;
     if (/^https?:\/\//i.test(url)) return url;
     if (url.startsWith('/')) return window.location.origin + url;
-    const base = new URL(window.location.href);
-    return new URL(url, base).href;
-  }
+    try {
+      return new URL(url, window.location.href).href;
+    } catch (e) {
+      return null;
+    }
+  };
 
   // Robust match type detector using page title, headings, and context
   function detectMatchTypeFromPage() {
@@ -646,371 +672,35 @@ function setLoading(isLoading, message = "") {
   }
 
   function setupUI() {
-    const sidePanel = document.createElement("div");
-    sidePanel.classList.add('dss-panel');
-    // --- Header controls (non-invasive addition) ---
-    // Insert a compact header with collapse/maximize/minimize buttons.
-    const headerWrap = document.createElement('div');
-    headerWrap.style.display = 'flex';
-    headerWrap.style.alignItems = 'center';
-    headerWrap.style.justifyContent = 'space-between';
-    headerWrap.style.marginBottom = '8px';
-    headerWrap.style.background = '#f7f7f7';
-    headerWrap.style.padding = '6px 8px';
-    headerWrap.style.borderRadius = '6px';
-  headerWrap.style.userSelect = 'none';
-  // indicate draggable area visually
-  headerWrap.style.cursor = 'grab';
-
-  const headerLabel = document.createElement('div');
-  // Visible label intentionally left blank to keep UI compact while preserving controls
-  headerLabel.textContent = '';
-    headerLabel.style.fontWeight = '600';
-    headerLabel.style.flex = '1 1 auto';
-    // Add a subtle grip icon to the left of the label
-    const grip = document.createElement('div');
-    grip.style.width = '18px';
-    grip.style.height = '18px';
-    grip.style.marginRight = '8px';
-    grip.style.display = 'inline-block';
-    grip.style.verticalAlign = 'middle';
-    grip.title = 'Drag panel';
-    // Small dotted grip made with CSS background (keeps DOM light)
-    grip.style.backgroundImage = 'radial-gradient(#999 20%, transparent 21%)';
-    grip.style.backgroundSize = '4px 4px';
-    grip.style.opacity = '0.6';
-    grip.style.borderRadius = '2px';
-    grip.style.flex = '0 0 auto';
-    const headerLeft = document.createElement('div');
-    headerLeft.style.display = 'flex';
-    headerLeft.style.alignItems = 'center';
-    headerLeft.appendChild(grip);
-    headerLeft.appendChild(headerLabel);
-    headerWrap.appendChild(headerLeft);
-
-    const controlsMini = document.createElement('div');
-    controlsMini.style.display = 'flex';
-    controlsMini.style.gap = '6px';
-
-    const btnCollapse = document.createElement('button');
-    btnCollapse.type = 'button';
-    btnCollapse.id = 'dss-btn-collapse';
-    btnCollapse.textContent = '▾';
-    btnCollapse.title = 'Collapse/Expand';
-    btnCollapse.style.padding = '0 6px';
-    btnCollapse.style.border = '1px solid #ccc';
-    btnCollapse.style.borderRadius = '4px';
-    btnCollapse.style.background = '#fff';
-    controlsMini.appendChild(btnCollapse);
-
-    const btnMax = document.createElement('button');
-    btnMax.type = 'button';
-    btnMax.id = 'dss-btn-maximize';
-    btnMax.textContent = '⤢';
-    btnMax.title = 'Maximize/Restore';
-    btnMax.style.padding = '0 6px';
-    btnMax.style.border = '1px solid #ccc';
-    btnMax.style.borderRadius = '4px';
-    btnMax.style.background = '#fff';
-    controlsMini.appendChild(btnMax);
-
-    const btnMin = document.createElement('button');
-    btnMin.type = 'button';
-    btnMin.id = 'dss-btn-minimize';
-    btnMin.textContent = '–';
-    btnMin.title = 'Minimize to dock';
-    btnMin.style.padding = '0 6px';
-    btnMin.style.border = '1px solid #ccc';
-    btnMin.style.borderRadius = '4px';
-    btnMin.style.background = '#fff';
-    controlsMini.appendChild(btnMin);
-
-  headerWrap.appendChild(controlsMini);
-  sidePanel.appendChild(headerWrap);
-
-  // Create a single content wrapper so collapse/expand can toggle one node
-  const contentWrap = document.createElement('div');
-  contentWrap.id = 'dss-content-wrap';
-  contentWrap.style.display = '';
-  // We will append the rest of the UI into this wrapper for safer toggles
-  sidePanel.appendChild(contentWrap);
-    // --- Draggable support ---
-    function enableDrag(panel, handle) {
-      let isDragging = false;
-      let startX = 0, startY = 0, startLeft = 0, startTop = 0;
-      let touchTimer = null;
-
-      const setGrabCursor = (grab) => {
-        try { handle.style.cursor = grab ? 'grabbing' : 'grab'; } catch (e) {}
-      };
-
-      const startDrag = (clientX, clientY) => {
-        isDragging = true;
-        const rect = panel.getBoundingClientRect();
-        startLeft = rect.left;
-        startTop = rect.top;
-        panel.style.left = `${startLeft}px`;
-        panel.style.top = `${startTop}px`;
-        panel.style.right = "";
-        panel.style.bottom = "";
-        startX = clientX;
-        startY = clientY;
-        document.body.style.userSelect = "none";
-        setGrabCursor(true);
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp, { once: true });
-      };
-
-      const onMouseDown = (e) => {
-        // If target is interactive, don't start drag
-        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
-        if (["input","select","textarea","button","a","label"].includes(tag)) return;
-        // Start drag immediately for mouse interactions
-        startDrag(e.clientX, e.clientY);
-      };
-
-      const onMouseMove = (e) => {
-        if (!isDragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        let newLeft = startLeft + dx;
-        let newTop = startTop + dy;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-        const rect = panel.getBoundingClientRect();
-        const w = rect.width;
-        const h = rect.height;
-        const margin = 8;
-        newLeft = Math.max(margin, Math.min(vw - w - margin, newLeft));
-        newTop = Math.max(margin, Math.min(vh - h - margin, newTop));
-        panel.style.left = `${newLeft}px`;
-        panel.style.top = `${newTop}px`;
-      };
-
-      const onMouseUp = () => {
-        isDragging = false;
-        window.removeEventListener('mousemove', onMouseMove);
-        document.body.style.userSelect = "";
-        setGrabCursor(false);
-        try {
-          const left = parseInt(panel.style.left || 0, 10) || 0;
-          const top = parseInt(panel.style.top || 0, 10) || 0;
-          chrome.storage.local.set({ dssPanelPos: { left, top } });
-        } catch {}
-      };
-
-      // Touch: implement a long-press (300ms) to enter drag mode on small screens
-      const onTouchStart = (e) => {
-        if (!e.touches || e.touches.length === 0) return;
-        const touch = e.touches[0];
-        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
-        if (["input","select","textarea","button","a","label"].includes(tag)) return;
-        // Start a timer; only begin dragging if user keeps pressing
-        touchTimer = setTimeout(() => {
-          startDrag(touch.clientX, touch.clientY);
-          // Prevent default to avoid page scrolling while dragging
-          e.preventDefault();
-        }, 300);
-      };
-
-      const onTouchMove = (e) => {
-        // If we haven't entered dragging, but there's movement, cancel long-press
-        if (!isDragging && touchTimer) {
-          clearTimeout(touchTimer); touchTimer = null; return;
-        }
-        if (!isDragging) return;
-        if (!e.touches || e.touches.length === 0) return;
-        const t = e.touches[0];
-        // emulate mousemove
-        onMouseMove({ clientX: t.clientX, clientY: t.clientY });
-        e.preventDefault();
-      };
-
-      const onTouchEnd = (e) => {
-        if (touchTimer) { clearTimeout(touchTimer); touchTimer = null; }
-        if (isDragging) onMouseUp();
-      };
-
-      handle.addEventListener('mousedown', onMouseDown);
-      // Add touch handlers (passive false where needed to allow preventDefault)
-      handle.addEventListener('touchstart', onTouchStart, { passive: false });
-      handle.addEventListener('touchmove', onTouchMove, { passive: false });
-      handle.addEventListener('touchend', onTouchEnd);
-    }
-
-  // Use the visible header as the drag handle so users can click anywhere on
-  // the top bar to drag the panel. This is more intuitive than a tiny invisible
-  // area. The enableDrag() guard ignores interactive elements (buttons/links)
-  // so header controls remain clickable.
-    sidePanel.style.position = "fixed";
-    // Position will be restored from storage or defaulted just below
-    sidePanel.style.background = "#f9f9f9";
-    sidePanel.style.border = "1px solid #ccc";
-    sidePanel.style.borderRadius = "6px";
-    sidePanel.style.boxShadow = "0 2px 6px rgba(0,0,0,0.1)";
-    sidePanel.style.padding = "12px";
-    sidePanel.style.maxHeight = "80vh";
-    sidePanel.style.overflowY = "auto";
-    sidePanel.style.zIndex = 9999;
-    sidePanel.style.minWidth = "440px";
-
-    // Restore saved position if any (else default to top-right)
+    const { panel, contentWrap } = window.KNLTBPanel.createStandardPanel('KNLTB Tools - Draw', {
+      id: 'dss-panel',
+      className: 'dss-panel',
+      top: '80px',
+      right: '20px',
+      width: '720px',
+      minWidth: '520px'
+    });
+    dssPanel = panel;
+    // Restore saved position if any
     try {
       chrome.storage.local.get('dssPanelPos', (res) => {
         const pos = res && res.dssPanelPos;
         if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
-          sidePanel.style.left = `${pos.left}px`;
-          sidePanel.style.top = `${pos.top}px`;
-          sidePanel.style.right = '';
-        } else {
-          sidePanel.style.top = '80px';
-          sidePanel.style.right = '20px';
+          panel.style.left = `${pos.left}px`;
+          panel.style.top = `${pos.top}px`;
+          panel.style.right = '';
         }
       });
     } catch {}
 
-  const title = document.createElement("h4");
-  // Keep the title element for accessibility and layout but don't show text
-  title.textContent = "";
-    sidePanel.appendChild(title);
-
-  // Add action button row (flex container)
-  const actionRow = document.createElement('div');
+    // Add action button row (flex container)
+    const actionRow = document.createElement('div');
     actionRow.id = 'dss-action-row';
     actionRow.style.display = 'flex';
     actionRow.style.gap = '8px';
     actionRow.style.flexWrap = 'wrap';
     actionRow.style.margin = '0 0 12px 0';
-  contentWrap.appendChild(actionRow);
-
-  // Make panel draggable via the visible header (headerWrap). Keep title
-  // as a secondary handle for accessibility.
-  enableDrag(sidePanel, headerWrap);
-  enableDrag(sidePanel, title);
-
-    // --- Wire the non-invasive header controls ---
-    (function wireHeaderControls() {
-      let isCollapsed = false;
-      let wasMaximized = false;
-      let prevStyles = {};
-      // Store previous display values so we can restore them exactly
-      const savedDisplays = new Map();
-
-      btnCollapse.addEventListener('click', (e) => {
-        e.stopPropagation();
-        isCollapsed = !isCollapsed;
-        // If we created a content wrapper later, prefer toggling that to avoid
-        // touching many children's inline styles (safer for layout & spinners)
-        const contentWrap = document.getElementById('dss-content-wrap');
-        if (contentWrap) {
-          if (isCollapsed) {
-            contentWrap.style.display = 'none';
-            btnCollapse.textContent = '▸';
-          } else {
-            contentWrap.style.display = '';
-            // Force reflow and notify charts/observers
-            void contentWrap.offsetWidth;
-            try { window.dispatchEvent(new Event('resize')); } catch (e) {}
-            // Ensure spinner hidden after expand (defensive)
-            try { setLoading(false); } catch (e) {}
-            btnCollapse.textContent = '▾';
-          }
-          return;
-        }
-
-        // Fallback: previous per-child save/restore behavior
-        if (isCollapsed) {
-          // Save current inline style.display (or computed) and hide children
-          savedDisplays.clear();
-          Array.from(sidePanel.children).forEach(ch => {
-            if (ch === headerWrap) return;
-            try {
-              const inline = ch.style && ch.style.display;
-              const comp = window.getComputedStyle ? window.getComputedStyle(ch).display : '';
-              savedDisplays.set(ch, (inline && inline !== '') ? inline : comp || '');
-            } catch (err) {
-              savedDisplays.set(ch, ch.style && ch.style.display ? ch.style.display : '');
-            }
-            ch.style.display = 'none';
-          });
-          btnCollapse.textContent = '▸';
-        } else {
-          Array.from(sidePanel.children).forEach(ch => {
-            if (ch === headerWrap) return;
-            const prev = savedDisplays.get(ch);
-            try {
-              if (prev === undefined || prev === '') {
-                ch.style.display = '';
-              } else {
-                ch.style.display = prev;
-              }
-            } catch (err) {
-              ch.style.display = '';
-            }
-          });
-          void sidePanel.offsetWidth;
-          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
-          try { setLoading(false); } catch (e) {}
-          savedDisplays.clear();
-          btnCollapse.textContent = '▾';
-        }
-      });
-
-      btnMax.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (!wasMaximized) {
-          // save previous
-          prevStyles.left = sidePanel.style.left || '';
-          prevStyles.top = sidePanel.style.top || '';
-          prevStyles.width = sidePanel.style.width || '';
-          prevStyles.height = sidePanel.style.height || '';
-          sidePanel.style.left = '0px';
-          sidePanel.style.top = '0px';
-          sidePanel.style.width = window.innerWidth + 'px';
-          sidePanel.style.height = window.innerHeight + 'px';
-          sidePanel.style.maxWidth = '100vw';
-          sidePanel.style.maxHeight = '100vh';
-          wasMaximized = true;
-          btnMax.textContent = '⤡';
-        } else {
-          sidePanel.style.left = prevStyles.left;
-          sidePanel.style.top = prevStyles.top;
-          sidePanel.style.width = prevStyles.width;
-          sidePanel.style.height = prevStyles.height;
-          wasMaximized = false;
-          btnMax.textContent = '⤢';
-        }
-      });
-
-      btnMin.addEventListener('click', (e) => {
-        e.stopPropagation();
-        // minimal dock: create a small button and hide panel
-        let dock = document.getElementById('dss-dock-btn');
-        if (!dock) {
-          dock = document.createElement('button');
-          dock.id = 'dss-dock-btn';
-          dock.textContent = '☰';
-          dock.title = 'Restore panel';
-          dock.style.position = 'fixed';
-          dock.style.bottom = '20px';
-          dock.style.left = '20px';
-          dock.style.zIndex = 10000;
-          dock.style.width = '44px';
-          dock.style.height = '44px';
-          dock.style.borderRadius = '50%';
-          dock.style.background = '#fff';
-          dock.style.border = '1px solid #ccc';
-          dock.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
-          document.body.appendChild(dock);
-        }
-        sidePanel.style.display = 'none';
-        dock.onclick = () => {
-          sidePanel.style.display = '';
-          dock.remove();
-        };
-      });
-    })();
-
+    contentWrap.appendChild(actionRow);
     // Add "Automatically detect group matches" button (primary, as <a>)
     const autoGroupsBtn = document.createElement('a');
     autoGroupsBtn.id = 'autoGroupMatchesBtn';
@@ -1087,24 +777,6 @@ function setLoading(isLoading, message = "") {
     refreshRatingsBtn.onclick = function(e) { e.preventDefault(); refreshPlayerRatings(); };
     actionRow.appendChild(refreshRatingsBtn);
 
-    // Add "Load Imported Matches" button (primary, as <a>)
-    const loadImportedBtn = document.createElement("a");
-    loadImportedBtn.id = "loadImportedBtn";
-    loadImportedBtn.href = "#";
-    loadImportedBtn.className = 'btn btn--primary';
-    loadImportedBtn.style.display = 'inline-flex';
-    loadImportedBtn.style.alignItems = 'center';
-    loadImportedBtn.style.marginLeft = '0.75rem';
-    loadImportedBtn.innerHTML = `
-      <svg aria-hidden="true" fill="currentColor" width="20" height="20" viewBox="0 0 24 24" style="vertical-align: middle; position: relative; top: -1px; margin-right: 8px;">
-        <path d="M5 20h14v-2H5v2z"/>
-        <path d="M11 3h2v9h3l-4 4-4-4h3z"/>
-      </svg>
-      <span class="nav-link__value">Load Imported Matches</span>
-    `;
-    loadImportedBtn.onclick = function(e) { e.preventDefault(); loadImportedMatches(); };
-    actionRow.appendChild(loadImportedBtn);
-
     const status = document.createElement("div");
     status.id = "matchStatus";
     status.style.margin = "6px 0";
@@ -1133,8 +805,12 @@ function setLoading(isLoading, message = "") {
     matchTable.id = "matchList";
     matchTable.style.fontSize = "12px";
     matchTable.style.borderCollapse = "collapse";
-    matchTable.style.width = "100%";
+    matchTable.style.width = "auto";
+    matchTable.style.minWidth = "max-content";
+    matchTable.style.whiteSpace = "nowrap";
+    matchTable.style.tableLayout = "auto";
     matchTable.style.marginTop = "8px";
+    matchTable.style.border = "1px solid #ddd";
     matchTable.innerHTML = `
     <thead>
       <tr style="background:#eee;font-weight:bold">
@@ -1155,7 +831,7 @@ function setLoading(isLoading, message = "") {
     // Wrap the match table in a horizontally scrollable container for mobile
     const tableWrap = document.createElement('div');
     tableWrap.className = 'dss-table-wrap';
-    tableWrap.style.overflowX = 'auto';
+    tableWrap.style.overflowX = 'visible';
     tableWrap.style.maxWidth = '100%';
     tableWrap.appendChild(matchTable);
   contentWrap.appendChild(tableWrap);
@@ -1299,7 +975,7 @@ function setLoading(isLoading, message = "") {
       renderMatches();
     });
 
-    document.body.appendChild(sidePanel);
+    document.body.appendChild(panel);
   }
 
   function attachRowListeners() {
@@ -1346,8 +1022,27 @@ function setLoading(isLoading, message = "") {
       for (let idx = 0; idx < paired.length; idx++) matchQueue[idx] = paired[idx].m;
     } catch (e) { console.warn('[DSS] Failed to sort matchQueue by date', e); }
 
-    const tbody = document.querySelector("#matchList tbody");
+    const table = document.getElementById('matchList');
+    const tbody = table ? table.querySelector('tbody') : null;
+    if (!tbody) {
+      console.warn('[DSS] renderMatches: missing #matchList tbody');
+      return;
+    }
     tbody.innerHTML = "";
+
+    if (matchQueue.length === 0) {
+      const emptyRow = document.createElement('tr');
+      const emptyCell = document.createElement('td');
+      emptyCell.colSpan = 11;
+      emptyCell.textContent = 'No matches loaded yet. Press "Find all" or "Show Matches" to import and display matches.';
+      emptyCell.style.padding = '12px 8px';
+      emptyCell.style.textAlign = 'center';
+      emptyCell.style.color = '#444';
+      emptyCell.style.fontStyle = 'italic';
+      emptyRow.appendChild(emptyCell);
+      tbody.appendChild(emptyRow);
+      return;
+    }
 
     let tempRatings = { ...playerRatings };
 
@@ -1665,6 +1360,7 @@ function setLoading(isLoading, message = "") {
     if (dssLastChangedPlayers && dssLastChangedPlayers.size) {
       setTimeout(() => { dssLastChangedPlayers = new Set(); }, 0);
     }
+    autoResizePanel(dssPanel);
   }
 
   function recomputeRatings() {
@@ -1822,19 +1518,19 @@ function getMatchTimestamp(m) {
   const sig = matchSignature(imp);
         if (seenImported.has(sig)) {
           console.log('[DSS] Skipping duplicate imported match (dupe in imported array) #', idx+1);
-          return;
+          continue;
         }
         seenImported.add(sig);
         if (existingSigs.has(sig)) {
           console.log('[DSS] Skipping import because exact match already exists in queue #', idx+1);
-          return;
+          continue;
         }
         // relaxed signature: ignore date/time differences so we don't import duplicates that only differ by missing/variant dates
         const parts = sig.split('::');
         const relaxedSig = (parts[0] || '') + '::' + (parts[2] || '');
         if (existingRelaxed.has(relaxedSig)) {
           console.log('[DSS] Skipping import because a matching teams+score entry already exists in queue #', idx+1);
-          return;
+          continue;
         }
   console.log("===============================================");
   console.log(`[DSS] Processing imported match #${idx + 1}:`);
@@ -2140,10 +1836,8 @@ function getMatchTimestamp(m) {
       chrome.storage.local.set({ importedMatches: allMatches }, () => {
         console.log(`[DSS] [auto] Stored ${allMatches.length} imported matches from groups.`);
         const status = document.getElementById('matchStatus');
-        if (status) status.textContent = `Imported ${allMatches.length} matches from groups.`;
-        if (isRatingsPage()) {
-          loadImportedMatches();
-        }
+        if (status) status.textContent = `Imported ${allMatches.length} matches from groups. Loading into panel...`;
+        loadImportedMatches();
       });
       setLoading(false);
     } catch (e) {
@@ -2769,12 +2463,10 @@ function getMatchTimestamp(m) {
           chrome.storage.local.set({ importedMatches: enhanced, importedProfilesCache: { profiles: discoveredProfiles, ratings: discoveredRatings } }, () => {
             console.log(`[DSS] findAllSimilarCategories: Stored ${enhanced.length} extracted matches to storage.importedMatches (${collectedMatches.length} before dedupe).`);
             const status = document.getElementById('matchStatus');
-            if (isRatingsPage()) {
-              // If we're on the ratings page, load them immediately into the match queue
-              loadImportedMatches();
-            } else {
-              if (status) status.textContent = `Found ${enhanced.length} matches (stored). Switch to ratings page to import.`;
+            if (status) {
+              status.textContent = `Found ${enhanced.length} matches. Loading into the panel...`;
             }
+            loadImportedMatches();
           });
         } catch (e) {
           console.warn('[DSS] findAllSimilarCategories: Failed to store importedMatches', e);
@@ -3194,176 +2886,7 @@ function isMatchSchedulePage() {
 }
 
 // Helper to wait for scores to render
-async function waitForMatchPoints(matchEl, timeoutMs = 4000) {
-  return new Promise(resolve => {
-    const hasPoints = () => matchEl.querySelector('ul.points li.points__cell');
-    if (hasPoints()) return resolve(true);
-
-    const obs = new MutationObserver(() => {
-      if (hasPoints()) {
-        obs.disconnect();
-        resolve(true);
-      }
-    });
-    obs.observe(matchEl, { childList: true, subtree: true });
-    setTimeout(() => { obs.disconnect(); resolve(Boolean(hasPoints())); }, timeoutMs);
-  });
-}
-
 // Async importer that waits for scores to render
-async function extractMatchesFromSchedulePage() {
-  const matches = [];
-  // Select all match elements inside match groups, not just .match-group__item
-  const matchEls = document.querySelectorAll('.match-group .match');
-  console.log(`[DSS] Found ${matchEls.length} match elements on schedule page.`);
-
-  for (const matchEl of matchEls) {
-    const rows = matchEl.querySelectorAll('.match__row-title');
-    console.log(`[DSS] Processing match element with ${rows.length} rows.`);
-    if (rows.length !== 2) continue;
-
-    // Ensure scores/points have time to render (handles AJAX/lazy updates)
-    await waitForMatchPoints(matchEl, 4000);
-
-  // Collect profile links for players when available
-  const profileMap = {};
-  const profileRatings = {};
-    const extractTeam = row => {
-      const nodes = Array.from(row.querySelectorAll('.match__row-title-value .nav-link__value')).filter(Boolean);
-      const names = nodes.map(el => el.textContent.replace(/\[\d+\]/g, "").trim()).filter(Boolean);
-      nodes.forEach(el => {
-        try {
-          const name = el.textContent.replace(/\[\d+\]/g, '').trim();
-          const nn = normalizeName(name);
-          const a = el.closest && el.closest('a[href]');
-          if (a) {
-            const href = a.getAttribute('href');
-            const abs = toAbsUrl(href);
-            if (abs) profileMap[nn] = abs;
-          }
-          // try to find nearby rating information on schedule rows
-          try {
-            const ratingEl = el.closest('.match__row')?.querySelector('.match__row-rating .nav-link__value') || el.closest('tr')?.querySelector('td:nth-child(4)');
-            if (ratingEl) {
-              const raw = (ratingEl.textContent || '').trim().replace(/\s+/g, '').replace(',', '.');
-              const v = parseFloat(raw.replace(/[^0-9\.-]/g, ''));
-              if (!isNaN(v)) profileRatings[nn] = v;
-            }
-          } catch (e) {}
-        } catch (e) {}
-      });
-      return names;
-    };
-
-    const team1 = extractTeam(rows[0]);
-    const team2 = extractTeam(rows[1]);
-    console.log(`[DSS] Extracted teams: Team1=[${team1.join(", ")}], Team2=[${team2.join(", ")} ]`);
-
-    if (!team1.length || !team2.length) continue;
-
-    // Try to get the closest previous sibling with a date
-    let matchDate = null;
-    let node = matchEl;
-    while ((node = node.previousElementSibling)) {
-      const dateNode = node.querySelector?.('.nav-link__value');
-      if (dateNode && /\d{1,2}-\d{1,2}-\d{4}/.test(dateNode.textContent)) {
-        matchDate = dateNode.textContent.match(/\d{1,2}-\d{1,2}-\d{4}/)[0];
-        break;
-      }
-    }
-
-    // Try to read full date+time from the match footer (e.g., "za 2-8-2025 18:30")
-    let matchDateTime = null;
-    try {
-      const footerDates = Array.from(matchEl.querySelectorAll('.match__footer .nav-link__value'))
-        .map(el => (el.textContent || '').trim());
-      const dt = footerDates.find(t => /\d{1,2}-\d{1,2}-\d{4}\s+\d{1,2}:\d{2}/.test(t));
-      if (dt) {
-        const m = dt.match(/\d{1,2}-\d{1,2}-\d{4}\s+\d{1,2}:\d{2}/);
-        if (m) matchDateTime = m[0];
-      }
-    } catch {}
-
-    const parsed = parseWinnerFromMatchEl(matchEl);
-    const winner = parsed.winner;
-    const score = parsed.score;
-    const resultFlag = parsed.result || null;
-    console.log('[DSS] Parsed score array:', score);
-  // Try to capture a nearby category label for the match element itself
-  let localCategoryRaw = null;
-  try {
-    const grp = matchEl.closest('.match-group, .module, .matches');
-    if (grp) {
-      const titleNode = grp.querySelector('.module__title, .match-group__title, .module__heading, .media__title .nav-link__value, .media__title');
-      if (titleNode && (titleNode.textContent || '').trim()) localCategoryRaw = titleNode.textContent.trim();
-    }
-    if (!localCategoryRaw) {
-      let sib = matchEl.previousElementSibling;
-      let tries = 0;
-      while (sib && tries++ < 8 && !localCategoryRaw) {
-        try {
-          const nav = sib.querySelector && (sib.querySelector('.nav-link__value') || sib.querySelector('.module__title') || sib.querySelector('.media__title'));
-          if (nav && (nav.textContent || '').trim()) { localCategoryRaw = nav.textContent.trim(); break; }
-          const t = (sib.textContent || '').trim();
-          if (t && categoryTokenFromText(t)) { localCategoryRaw = t; break; }
-        } catch (e) {}
-        sib = sib.previousElementSibling;
-      }
-    }
-  } catch (e) { localCategoryRaw = null; }
-
-  const matchObj = { date: matchDate, dateTime: matchDateTime, team1, team2, winner, score, result: resultFlag };
-  if (localCategoryRaw) matchObj.categoryRaw = matchObj.categoryRaw || localCategoryRaw;
-    // Attach a category inferred from the schedule page context so imported schedule matches show a category
-    try {
-      const pageLabel = (document.querySelector('.page-subhead .media__title .nav-link__value') || document.querySelector('.module__title .nav-link__value') || document.querySelector('.module__title') || document.querySelector('.media__title'))?.textContent?.trim() || (document.title || '').trim();
-      if (pageLabel) matchObj.category = pageLabel;
-    } catch (e) {}
-    if (Object.keys(profileMap).length || Object.keys(profileRatings).length) {
-      matchObj._playerProfiles = { ...profileMap };
-      if (Object.keys(profileRatings).length) matchObj._playerProfiles.__ratings = { ...profileRatings };
-    }
-  matches.push(matchObj);
-  if (resultFlag) {
-    try { console.log('[DSS] extractMatchesFromSchedulePage: pushing match with special result', resultFlag, 'Team1=', team1.join(', '), 'Team2=', team2.join(', ')); } catch(e){}
-  }
-    const scoreStr = Array.isArray(score) ? score.map(p => `${p[0]}-${p[1]}`).join(' ') : 'n/a';
-    console.log(`[DSS] Pushed match with date ${matchDate} ${matchDateTime ? '('+matchDateTime+')' : ''}: Team1=[${team1.join(", ")}], Team2=[${team2.join(", ")}], winner=${winner ?? 'none'}, score=${scoreStr}`);
-  }
-
-  console.log('[DSS] Parsed matches from schedule:', matches);
-  chrome.storage.local.set({ importedMatches: matches }, () => {
-    try {
-      // Add a visible message to the page to confirm how many matches were imported
-      let feedback = document.getElementById('dss-import-feedback');
-      if (!feedback) {
-        feedback = document.createElement('div');
-        feedback.id = 'dss-import-feedback';
-        feedback.style.display = 'inline-block';
-        feedback.style.marginRight = '1rem';
-        feedback.style.fontWeight = 'bold';
-        feedback.style.fontSize = '1rem';
-        feedback.style.color = 'green';
-        const banner = document.querySelector('#draw-matches .module__banner');
-        const importBtn = document.getElementById('dss-import-matches');
-        if (banner && importBtn) {
-          banner.insertBefore(feedback, importBtn);
-        } else if (banner) {
-          banner.appendChild(feedback);
-        } else {
-          document.body.appendChild(feedback);
-        }
-      }
-      if (feedback && feedback.parentNode) {
-        feedback.textContent = `✅ Imported ${matches.length} match${matches.length === 1 ? '' : 'es'} from schedule.`;
-      } else {
-        console.error('[DSS] Feedback element context is invalidated, cannot set import confirmation text.');
-      }
-    } catch (e) {
-      console.error('[DSS] Error updating import feedback:', e);
-    }
-  });
-}
 
 function normalizeEventTitle(txt) {
   return (txt || '')
@@ -3679,24 +3202,8 @@ function addGoToOverviewMainBanner() {
   }
 }
 
-function addImportButton() {
-  const container = document.querySelector('#draw-matches .module__banner');
-  if (!container || document.querySelector('#dss-import-matches')) return;
-
-  const btn = document.createElement('button');
-  btn.id = 'dss-import-matches';
-  btn.className = 'btn btn--primary nav-link';
-  btn.style.marginLeft = '1rem';
-  btn.innerHTML = `
-    <span class="nav-link__value">📥 Import Matches</span>`;
-  btn.onclick = async () => { await extractMatchesFromSchedulePage(); };
-
-  container.appendChild(btn);
-}
-
 if (isMatchSchedulePage()) {
   console.log('[DSS] Match schedule page detected');
-  addImportButton();
   addGoToOverviewButton();
 }
 
