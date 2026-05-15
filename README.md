@@ -10,7 +10,9 @@ A Chrome extension that adds interactive rating tools to [MijnKNLTB](https://mij
 
 Activated on any tournament draw/group page that contains a player registration table.
 
-![Draw page showing match table with ratings and win percentages](image_1280x800.png)
+![Draw page showing match table with ratings and win percentages](README-p1.png)
+
+![Draw page showing season graph](README-p2.png)
 
 A floating, resizable panel appears with the following functionality:
 
