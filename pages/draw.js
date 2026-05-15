@@ -2605,6 +2605,53 @@ function findTeamByPlayers(playerNames) {
     return document.querySelector("table.ruler") !== null;
   }
 
+  function addTeamAvgColumn() {
+    const table = document.querySelector('table.ruler');
+    if (!table || table.rows.length < 2) return;
+    const headerRow = table.rows[0];
+    if (!headerRow.cells[3] || headerRow.cells[3].textContent.trim() !== 'Rating') return;
+    if (headerRow.querySelector('[data-team-avg-header]')) return;
+
+    const th = document.createElement('td');
+    th.textContent = 'Team Avg ⇕';
+    th.setAttribute('data-team-avg-header', '1');
+    th.style.cssText = 'cursor:pointer;white-space:nowrap;font-weight:bold;color:#1a73e8;user-select:none;';
+    th.title = 'Click to sort by team average rating';
+    headerRow.insertBefore(th, headerRow.cells[4]);
+
+    for (let i = 1; i < table.rows.length; i++) {
+      const row = table.rows[i];
+      const ratingCell = row.cells[3];
+      if (!ratingCell) continue;
+      const ps = ratingCell.querySelectorAll('p');
+      let avg = null;
+      if (ps.length >= 2) {
+        const r1 = parseFloat(ps[0].textContent.trim().replace(',', '.'));
+        const r2 = parseFloat(ps[1].textContent.trim().replace(',', '.'));
+        if (!isNaN(r1) && !isNaN(r2)) avg = (r1 + r2) / 2;
+      }
+      const td = document.createElement('td');
+      td.setAttribute('data-avg', avg !== null ? avg : '');
+      td.style.cssText = 'text-align:center;font-weight:600;';
+      td.textContent = avg !== null ? avg.toFixed(4).replace('.', ',') : '-';
+      row.insertBefore(td, row.cells[4]);
+    }
+
+    let sortDir = 1;
+    th.addEventListener('click', function () {
+      sortDir *= -1;
+      th.textContent = 'Team Avg ' + (sortDir === 1 ? '↑' : '↓');
+      const rows = Array.from(table.rows).slice(1);
+      rows.sort((a, b) => {
+        const aVal = parseFloat(a.cells[4].getAttribute('data-avg')) || 0;
+        const bVal = parseFloat(b.cells[4].getAttribute('data-avg')) || 0;
+        return (aVal - bVal) * sortDir;
+      });
+      const parent = table.tBodies[0] || table;
+      rows.forEach(r => parent.appendChild(r));
+    });
+  }
+
   function injectCategoryOverviewButtons() {
     const links = document.querySelectorAll('div.module__content ul > li > h4 > span > a[href]');
     links.forEach(a => {
@@ -2637,6 +2684,7 @@ function findTeamByPlayers(playerNames) {
     try { addGoToOverviewMainBanner(); } catch (e) {}
     try { addRatingShortcut(); } catch (e) {}
     try { injectCategoryOverviewButtons(); } catch (e) {}
+    try { addTeamAvgColumn(); } catch (e) {}
   }
 
   if (document.readyState === "loading") {
