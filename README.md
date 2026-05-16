@@ -4,6 +4,18 @@ A Chrome extension that adds interactive rating tools to [MijnKNLTB](https://mij
 
 ---
 
+## Table of contents
+
+- [Features](#features)
+  - [Draw page — match rating simulator](#draw-page--match-rating-simulator)
+  - [Main page — navigation shortcuts](#main-page--navigation-shortcuts)
+  - [Player profile — rating chart](#player-profile--rating-chart)
+- [Installation](#installation)
+- [Project structure](#project-structure)
+- [Rating model](#rating-model)
+
+---
+
 ## Features
 
 ### Draw page — match rating simulator
