@@ -5,7 +5,9 @@
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\" -Recurse -Directory)",
       "Bash(Select-Object -First 20 FullName)",
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\" -Recurse -File | Where-Object { $_.FullName -notmatch '\\(node_modules|\\\\.git|dist|build\\)' } | Select-Object FullName | Sort-Object FullName)",
-      "PowerShell($files = @\\(\\); Get-ChildItem -Path \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\" -Recurse -File | Where-Object { $_.FullName -notmatch '\\(node_modules|\\\\.git|dist|build|\\\\.png|\\\\.icon\\)' } | ForEach-Object { $lines = \\(Get-Content $_.FullName -ErrorAction SilentlyContinue | Measure-Object -Line\\).Lines; if \\($lines -eq $null\\) { $lines = 0 }; $files += [PSCustomObject]@{ Path = $_.FullName; Lines = $lines } }; $files | Sort-Object -Property Lines -Descending | ForEach-Object { \"$\\($_.Lines\\)`t$\\($_.Path\\)\" })"
+      "PowerShell($files = @\\(\\); Get-ChildItem -Path \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\" -Recurse -File | Where-Object { $_.FullName -notmatch '\\(node_modules|\\\\.git|dist|build|\\\\.png|\\\\.icon\\)' } | ForEach-Object { $lines = \\(Get-Content $_.FullName -ErrorAction SilentlyContinue | Measure-Object -Line\\).Lines; if \\($lines -eq $null\\) { $lines = 0 }; $files += [PSCustomObject]@{ Path = $_.FullName; Lines = $lines } }; $files | Sort-Object -Property Lines -Descending | ForEach-Object { \"$\\($_.Lines\\)`t$\\($_.Path\\)\" })",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Larsa\\\\git\\\\KNLTB-Tools\" -Recurse -File -Include \"*.js\",\"*.html\",\"*.ts\",\"*.tsx\",\"*.vue\")",
+      "Bash(Select-Object -First 50)"
     ]
   }
 }
