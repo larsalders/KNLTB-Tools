@@ -184,10 +184,19 @@
       const contentWrap = panel.querySelector('.panel-content');
       if (contentWrap) {
         if (isCollapsed) {
+          prevStyles.collapseHeight = panel.style.height;
+          prevStyles.collapseMinHeight = panel.style.minHeight;
+          prevStyles.collapseResize = panel.style.resize;
           contentWrap.style.display = 'none';
+          panel.style.height = 'auto';
+          panel.style.minHeight = '0';
+          panel.style.resize = 'none';
           collapseBtn.textContent = '▸';
         } else {
           contentWrap.style.display = 'flex';
+          panel.style.height = prevStyles.collapseHeight || '';
+          panel.style.minHeight = prevStyles.collapseMinHeight || '160px';
+          panel.style.resize = prevStyles.collapseResize || 'both';
           collapseBtn.textContent = '▾';
         }
       }

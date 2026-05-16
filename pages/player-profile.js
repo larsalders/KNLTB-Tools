@@ -11,6 +11,8 @@
   let tableVisible = false;
   let _chartBtn = null;
   let _tableBtn = null;
+  let _panel = null;
+  let _contentWrap = null;
 
   function setStatus(message, kind = "info") {
     const el = document.getElementById("knltbStatus");
@@ -618,6 +620,27 @@
     if (panel) { panel.style.flex = "0 0 auto"; panel.style.minHeight = "20px"; }
     chartVisible = false;
     if (_chartBtn) _chartBtn.textContent = '📊 Show Rating Chart';
+    fitPanelToContent();
+  }
+
+  function fitPanelToContent() {
+    if (!_panel || !_contentWrap) return;
+    const tableEl = _contentWrap.querySelector('table');
+    if (tableEl) {
+      const wrapperEl = tableEl.parentElement;
+      const prevTableW = tableEl.style.width;
+      const prevWrapW = wrapperEl ? wrapperEl.style.width : null;
+      const prevWrapO = wrapperEl ? wrapperEl.style.overflowX : null;
+      tableEl.style.width = 'max-content';
+      if (wrapperEl) { wrapperEl.style.width = 'max-content'; wrapperEl.style.overflowX = 'visible'; }
+      _panel.style.width = 'max-content';
+      const natural = Math.min(Math.max(420, _panel.offsetWidth), Math.floor(window.innerWidth * 0.92));
+      _panel.style.width = natural + 'px';
+      tableEl.style.width = prevTableW || '100%';
+      if (wrapperEl) { wrapperEl.style.width = prevWrapW || '100%'; wrapperEl.style.overflowX = prevWrapO || 'auto'; }
+    } else {
+      _panel.style.width = '420px';
+    }
   }
 
   function fmtRtg(r) {
@@ -651,6 +674,7 @@
       existing.remove();
       tableVisible = false;
       if (_tableBtn) _tableBtn.textContent = '📋 Show Matches';
+      fitPanelToContent();
       return;
     }
 
@@ -869,6 +893,7 @@
       table.appendChild(tbody);
       wrapper.appendChild(table);
       container.appendChild(wrapper);
+      requestAnimationFrame(fitPanelToContent);
     }
 
     renderTable();
@@ -885,6 +910,8 @@
       left: '20px',
       width: '420px'
     });
+    _panel = panel;
+    _contentWrap = contentWrap;
 
     const btnRow = document.createElement('div');
     btnRow.style.display = 'flex';
