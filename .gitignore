@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE & editor
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
+
+# Node
+node_modules/
+npm-debug.log*
