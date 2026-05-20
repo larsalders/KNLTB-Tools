@@ -53,6 +53,7 @@ Click the winning team again to deselect and reset.
 
 - **Go to overview** buttons are injected next to each scheduled category (e.g. *Tennis HE6 - Groep A*), linking directly to that category's event overview
 - A **Go to overview** button is added to the "Volgende wedstrijd" banner
+  ![A **Go to overview** button is added to the "Volgende wedstrijd" banner](README-p3.png)
 - A **Rating** button is added next to "Mijn prestaties", jumping straight to your rating history page
 
 ---
