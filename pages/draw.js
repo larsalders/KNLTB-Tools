@@ -9,12 +9,43 @@ function addTeamAvgColumn() {
   if (!headerRow.cells[3] || headerRow.cells[3].textContent.trim() !== 'Rating') return;
   if (headerRow.querySelector('[data-team-avg-header]')) return;
 
-  const th = document.createElement('td');
-  th.textContent = 'Team Avg ⇕';
-  th.setAttribute('data-team-avg-header', '1');
-  th.style.cssText = 'cursor:pointer;white-space:nowrap;font-weight:bold;color:#1a73e8;user-select:none;';
-  th.title = 'Click to sort by team average rating';
-  headerRow.insertBefore(th, headerRow.cells[4]);
+  // Make the Rating column sortable and store data-rating on each row
+  const ratingTh = headerRow.cells[3];
+  ratingTh.textContent = 'Rating ⇕';
+  ratingTh.style.cssText = 'cursor:pointer;white-space:nowrap;font-weight:bold;color:#1a73e8;user-select:none;';
+  ratingTh.title = 'Click to sort by rating';
+
+  for (let i = 1; i < table.rows.length; i++) {
+    const row = table.rows[i];
+    const ratingCell = row.cells[3];
+    if (!ratingCell) continue;
+    const ps = ratingCell.querySelectorAll('p');
+    const raw = ps.length ? ps[0].textContent.trim() : ratingCell.textContent.trim();
+    const val = parseFloat(raw.replace(',', '.'));
+    ratingCell.setAttribute('data-rating', isNaN(val) ? '' : val);
+  }
+
+  let ratingDir = 1;
+  ratingTh.addEventListener('click', function () {
+    ratingDir *= -1;
+    ratingTh.textContent = 'Rating ' + (ratingDir === 1 ? '↑' : '↓');
+    avgTh.textContent = 'Team Avg ⇕';
+    const rows = Array.from(table.rows).slice(1);
+    rows.sort((a, b) => {
+      const aVal = parseFloat(a.cells[3].getAttribute('data-rating')) || 0;
+      const bVal = parseFloat(b.cells[3].getAttribute('data-rating')) || 0;
+      return (aVal - bVal) * ratingDir;
+    });
+    const parent = table.tBodies[0] || table;
+    rows.forEach(r => parent.appendChild(r));
+  });
+
+  const avgTh = document.createElement('td');
+  avgTh.textContent = 'Team Avg ⇕';
+  avgTh.setAttribute('data-team-avg-header', '1');
+  avgTh.style.cssText = 'cursor:pointer;white-space:nowrap;font-weight:bold;color:#1a73e8;user-select:none;';
+  avgTh.title = 'Click to sort by team average rating';
+  headerRow.insertBefore(avgTh, headerRow.cells[4]);
 
   for (let i = 1; i < table.rows.length; i++) {
     const row = table.rows[i];
@@ -34,15 +65,16 @@ function addTeamAvgColumn() {
     row.insertBefore(td, row.cells[4]);
   }
 
-  let sortDir = 1;
-  th.addEventListener('click', function () {
-    sortDir *= -1;
-    th.textContent = 'Team Avg ' + (sortDir === 1 ? '↑' : '↓');
+  let avgDir = 1;
+  avgTh.addEventListener('click', function () {
+    avgDir *= -1;
+    avgTh.textContent = 'Team Avg ' + (avgDir === 1 ? '↑' : '↓');
+    ratingTh.textContent = 'Rating ⇕';
     const rows = Array.from(table.rows).slice(1);
     rows.sort((a, b) => {
       const aVal = parseFloat(a.cells[4].getAttribute('data-avg')) || 0;
       const bVal = parseFloat(b.cells[4].getAttribute('data-avg')) || 0;
-      return (aVal - bVal) * sortDir;
+      return (aVal - bVal) * avgDir;
     });
     const parent = table.tBodies[0] || table;
     rows.forEach(r => parent.appendChild(r));
