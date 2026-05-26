@@ -335,31 +335,30 @@
       return;
     }
 
-    const baseDatasets = categories.map((cat, i) => {
-      const sorted = allSeasonMatches[cat]
-        .slice()
-        .sort((a, b) => {
-          const da = new Date(a.date);
-          const db = new Date(b.date);
-          if (da < db) return -1;
-          if (da > db) return 1;
-          return (b.detectIndex ?? 0) - (a.detectIndex ?? 0);
-        });
+    const colors = ["blue", "green", "orange"];
+    const sortedArrays = categories.map(cat =>
+      allSeasonMatches[cat].slice().sort((a, b) => {
+        const da = new Date(a.date);
+        const db = new Date(b.date);
+        if (da < db) return -1;
+        if (da > db) return 1;
+        return (b.detectIndex ?? 0) - (a.detectIndex ?? 0);
+      })
+    );
 
-      return {
-        label: cat.charAt(0).toUpperCase() + cat.slice(1),
-        data: sorted.map(m => ({ x: m.date, y: m.rating, meta: m.meta })),
-        borderColor: i === 0 ? "blue" : (i === 1 ? "green" : "orange"),
-        pointBackgroundColor: sorted.map(m => pointColor(m.meta.result)),
-        pointBorderColor: sorted.map(m => pointColor(m.meta.result)),
-        fill: false,
-        tension: 0.2,
-        borderWidth: 2,
-        pointRadius: 5,
-        pointHoverRadius: 7,
-        showLine: true
-      };
-    });
+    const baseDatasets = sortedArrays.map((sorted, i) => ({
+      label: categories[i].charAt(0).toUpperCase() + categories[i].slice(1),
+      data: sorted.map(m => ({ x: m.date, y: m.rating, meta: m.meta })),
+      borderColor: colors[i],
+      pointBackgroundColor: sorted.map(m => pointColor(m.meta.result)),
+      pointBorderColor: sorted.map(m => pointColor(m.meta.result)),
+      fill: false,
+      tension: 0.2,
+      borderWidth: 2,
+      pointRadius: 5,
+      pointHoverRadius: 7,
+      showLine: true
+    }));
 
     function computeLinearTrendXY(points) {
       const n = points.length;
@@ -404,7 +403,38 @@
       };
     }).filter(Boolean);
 
-    const datasets = [...baseDatasets, ...trendDatasets];
+    const todayStr = new Date().toISOString().split('T')[0];
+    const projectionDatasets = sortedArrays.map((sorted, i) => {
+      if (!sorted.length) return null;
+      const last = sorted[sorted.length - 1];
+      if (last.meta.impact === null || last.meta.impact === undefined || last.rating === null) return null;
+      const currentRating = last.rating + last.meta.impact;
+      const projData = last.date >= todayStr
+        ? [{ x: last.date, y: currentRating, meta: { _isCurrent: true } }]
+        : [
+            { x: last.date, y: last.rating, meta: { _projStart: true } },
+            { x: todayStr, y: currentRating, meta: { _isCurrent: true } }
+          ];
+      const endIdx = projData.length - 1;
+      return {
+        label: categories[i].charAt(0).toUpperCase() + categories[i].slice(1) + ' current',
+        _baseLabel: categories[i].charAt(0).toUpperCase() + categories[i].slice(1),
+        data: projData,
+        borderColor: colors[i],
+        borderDash: [5, 5],
+        borderWidth: 2,
+        pointRadius: projData.map((_, j) => j === endIdx ? 6 : 0),
+        pointHoverRadius: projData.map((_, j) => j === endIdx ? 8 : 0),
+        pointBackgroundColor: projData.map((_, j) => j === endIdx ? 'white' : 'transparent'),
+        pointBorderColor: projData.map(() => colors[i]),
+        pointBorderWidth: projData.map((_, j) => j === endIdx ? 2 : 0),
+        fill: false,
+        tension: 0,
+        showLine: true
+      };
+    }).filter(Boolean);
+
+    const datasets = [...baseDatasets, ...trendDatasets, ...projectionDatasets];
 
     const margin = 0.2;
     function computeYRangeFromVisible(chartLike) {
@@ -475,9 +505,17 @@
           legend: {
             display: true,
             position: "top",
+            labels: {
+              filter: (legendItem) => !legendItem.text.endsWith(' current')
+            },
             onClick: (e, legendItem, legend) => {
               const ci = legend.chart;
-              ci.setDatasetVisibility(legendItem.datasetIndex, !ci.isDatasetVisible(legendItem.datasetIndex));
+              const newVis = !ci.isDatasetVisible(legendItem.datasetIndex);
+              ci.setDatasetVisibility(legendItem.datasetIndex, newVis);
+              const clickedLabel = ci.data.datasets[legendItem.datasetIndex].label;
+              ci.data.datasets.forEach((ds, idx) => {
+                if (ds._baseLabel === clickedLabel) ci.setDatasetVisibility(idx, newVis);
+              });
               const range = computeYRangeFromVisible(ci);
               ci.options.scales.y.min = range.yMin;
               ci.options.scales.y.max = range.yMax;
@@ -514,14 +552,27 @@
 
               const raw = dataPoint.raw || {};
               const meta = raw.meta || {};
+              if (meta._projStart) { el.style.opacity = 0; return; }
+
               const dsLabel = dataPoint.dataset && dataPoint.dataset.label ? dataPoint.dataset.label : "";
               const date = new Date(raw.x);
               const dateStr = !isNaN(date) ? date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : String(raw.x);
               const ratingVal = Number(raw.y);
               const ratingStr = Number.isFinite(ratingVal) ? ratingVal.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(raw.y);
 
+              const isCurrent = !!(meta._isCurrent);
               const isTrend = /\btrend\b/i.test(dsLabel) && (!meta || Object.keys(meta).length === 0);
-              if (isTrend) {
+              if (isCurrent) {
+                el.innerHTML = `
+                  <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                    <div style="font-weight:600; font-size:12px;">${dsLabel.replace(' current', '')} — current rating</div>
+                  </div>
+                  <div style="display:flex; gap:12px;">
+                    <div><span style="opacity:.7;">As of</span> <strong>${dateStr}</strong></div>
+                    <div><span style="opacity:.7;">Rating</span> <strong>${ratingStr}</strong></div>
+                  </div>
+                `;
+              } else if (isTrend) {
                 el.innerHTML = `
                   <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
                     <div style="font-weight:600; font-size:12px;">${dateStr}</div>
@@ -830,14 +881,14 @@
         const myAvg   = fmtRtg(avgRating(myRtgs));
         const oppAvg  = fmtRtg(avgRating(oppRtgs));
 
-        // My rating: start → end (using impact to derive start)
-        const myEndRtg   = fmtRtg(m.rating);
-        const myStartRtg = (m.meta.impact !== null && m.meta.impact !== undefined && m.rating !== null)
-          ? fmtRtg(m.rating - m.meta.impact)
+        // My rating: start → end
+        const myStartRtg = fmtRtg(m.rating);
+        const myEndRtg   = (m.meta.impact !== null && m.meta.impact !== undefined && m.rating !== null)
+          ? fmtRtg(m.rating + m.meta.impact)
           : null;
         const myRtgText  = (myStartRtg !== null && myEndRtg !== null)
           ? `${myStartRtg} → ${myEndRtg}`
-          : (myEndRtg ?? "—");
+          : (myStartRtg ?? "—");
 
         // Partner: name (rating)  — the other player in my row
         const partnerIdx  = profIdx === 0 ? 1 : 0;
