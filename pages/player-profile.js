@@ -327,6 +327,22 @@
     return '#888888';
   }
 
+  function detectManualChanges(sorted) {
+    const changes = [];
+    for (let i = 0; i + 1 < sorted.length; i++) {
+      const curr = sorted[i];
+      const next = sorted[i + 1];
+      if (curr.meta.impact === null || curr.meta.impact === undefined) continue;
+      if (curr.rating === null || next.rating === null) continue;
+      const expected = Math.round((curr.rating + curr.meta.impact) * 10000) / 10000;
+      const diff = Math.round((next.rating - expected) * 10000) / 10000;
+      if (Math.abs(diff) > 0.5) {
+        changes.push({ date: next.date, fromRating: expected, toRating: next.rating, diff });
+      }
+    }
+    return changes;
+  }
+
   function processMatches() {
     const categories = ["singles", "doubles", "padel"];
 
@@ -346,19 +362,34 @@
       })
     );
 
-    const baseDatasets = sortedArrays.map((sorted, i) => ({
-      label: categories[i].charAt(0).toUpperCase() + categories[i].slice(1),
-      data: sorted.map(m => ({ x: m.date, y: m.rating, meta: m.meta })),
-      borderColor: colors[i],
-      pointBackgroundColor: sorted.map(m => pointColor(m.meta.result)),
-      pointBorderColor: sorted.map(m => pointColor(m.meta.result)),
-      fill: false,
-      tension: 0.2,
-      borderWidth: 2,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      showLine: true
-    }));
+    const allManualChanges = sortedArrays.map(detectManualChanges);
+
+    const manualColor = '#9c27b0';
+
+    const baseDatasets = sortedArrays.map((sorted, i) => {
+      const manualIndices = new Set(
+        allManualChanges[i].map(c => sorted.findIndex(m => m.date === c.date))
+      );
+      return {
+        label: categories[i].charAt(0).toUpperCase() + categories[i].slice(1),
+        data: sorted.map(m => ({ x: m.date, y: m.rating, meta: m.meta })),
+        borderColor: colors[i],
+        pointBackgroundColor: sorted.map(m => pointColor(m.meta.result)),
+        pointBorderColor: sorted.map(m => pointColor(m.meta.result)),
+        pointBorderWidth: 1,
+        fill: false,
+        tension: 0,
+        borderWidth: 2,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        showLine: true,
+        segment: {
+          borderColor: ctx => manualIndices.has(ctx.p1DataIndex) ? manualColor : undefined,
+          borderDash: ctx => manualIndices.has(ctx.p1DataIndex) ? [5, 5] : undefined,
+          borderWidth: ctx => manualIndices.has(ctx.p1DataIndex) ? 2.5 : undefined,
+        }
+      };
+    });
 
     function computeLinearTrendXY(points) {
       const n = points.length;
@@ -434,7 +465,39 @@
       };
     }).filter(Boolean);
 
-    const datasets = [...baseDatasets, ...trendDatasets, ...projectionDatasets];
+    const manualHoverDatasets = sortedArrays.flatMap((sorted, i) => {
+      const catLabel = categories[i].charAt(0).toUpperCase() + categories[i].slice(1);
+      return allManualChanges[i].map(change => {
+        const nextIdx = sorted.findIndex(m => m.date === change.date);
+        if (nextIdx <= 0) return null;
+        const prev = sorted[nextIdx - 1];
+        const next = sorted[nextIdx];
+        const t1 = new Date(prev.date).getTime();
+        const t2 = new Date(next.date).getTime();
+        const N = 20;
+        const pts = [];
+        for (let k = 1; k <= N; k++) {
+          const frac = k / (N + 1);
+          const d = new Date(t1 + (t2 - t1) * frac);
+          const xStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+          pts.push({ x: xStr, y: prev.rating + (next.rating - prev.rating) * frac,
+            meta: { _isManualChange: true, targetDate: next.date, diff: change.diff, fromRating: change.fromRating, toRating: change.toRating } });
+        }
+        return {
+          label: catLabel + ' manual change',
+          _baseLabel: catLabel,
+          data: pts,
+          showLine: false,
+          borderWidth: 0,
+          pointRadius: 0,
+          pointHoverRadius: 0,
+          pointHitRadius: 12,
+          fill: false,
+        };
+      }).filter(Boolean);
+    });
+
+    const datasets = [...baseDatasets, ...trendDatasets, ...projectionDatasets, ...manualHoverDatasets];
 
     const margin = 0.2;
     function computeYRangeFromVisible(chartLike) {
@@ -506,7 +569,7 @@
             display: true,
             position: "top",
             labels: {
-              filter: (legendItem) => !legendItem.text.endsWith(' current')
+              filter: (legendItem) => !legendItem.text.endsWith(' current') && !legendItem.text.endsWith(' manual change')
             },
             onClick: (e, legendItem, legend) => {
               const ci = legend.chart;
@@ -555,14 +618,30 @@
               if (meta._projStart) { el.style.opacity = 0; return; }
 
               const dsLabel = dataPoint.dataset && dataPoint.dataset.label ? dataPoint.dataset.label : "";
-              const date = new Date(raw.x);
+              const date = new Date(meta.targetDate || raw.x);
               const dateStr = !isNaN(date) ? date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : String(raw.x);
               const ratingVal = Number(raw.y);
               const ratingStr = Number.isFinite(ratingVal) ? ratingVal.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(raw.y);
 
+              const isManualChange = !!(meta._isManualChange);
               const isCurrent = !!(meta._isCurrent);
               const isTrend = /\btrend\b/i.test(dsLabel) && (!meta || Object.keys(meta).length === 0);
-              if (isCurrent) {
+              if (isManualChange) {
+                const fmtR = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+                const diff = meta.diff;
+                const diffStr = (diff >= 0 ? '+' : '') + fmtR(diff);
+                const diffColor = diff < 0 ? '#0a7f2e' : '#b00020';
+                el.innerHTML = `
+                  <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                    <div style="font-weight:600; font-size:12px; color:#9c27b0;">Manual rating adjustment</div>
+                    <div style="opacity:.7;">${dateStr}</div>
+                  </div>
+                  <div style="display:flex; gap:8px; align-items:center;">
+                    <span style="opacity:.7;">${fmtR(meta.fromRating)} → ${fmtR(meta.toRating)}</span>
+                    <strong style="color:${diffColor};">${diffStr}</strong>
+                  </div>
+                `;
+              } else if (isCurrent) {
                 el.innerHTML = `
                   <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
                     <div style="font-weight:600; font-size:12px;">${dsLabel.replace(' current', '')} — current rating</div>
