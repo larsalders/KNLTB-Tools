@@ -103,6 +103,55 @@ async function goToOverviewForCurrentEvent(override) {
     eventType = det.eventType;
   }
   try { chrome.storage.local.set({ dssEventTitle: eventType || '', dssEventTitleRaw: rawTitle || '' }); } catch {}
+
+  // Extract group name early (e.g. "Groep B", "Pool A") — used for fast-path and onderdelen scoring
+  const _groupRx = /\b(Groep|Pool|Poule)\s+([A-Z0-9]+)\b/i;
+  const groupName = (_groupRx.exec(eventType || '') || _groupRx.exec(rawTitle || '') || [])[0] || null;
+
+  // Build token variants early so the fast-path can use them
+  const tokenVariants = new Set();
+  {
+    const _tv = (eventType || rawTitle || '').toString();
+    const _m = _tv.match(/\b(GD|HD|DD|DE|HE)\s*-?\s*(\d+)\b/i);
+    if (_m) {
+      const b = _m[1].toLowerCase(), n = _m[2].toLowerCase();
+      tokenVariants.add(b + n); tokenVariants.add(b + ' ' + n); tokenVariants.add(b + '-' + n);
+    }
+    if (!tokenVariants.size && rawTitle) tokenVariants.add(rawTitle.toLowerCase());
+  }
+
+  // Fast path: find a draw link on the current page that matches the category (+group).
+  // Covers the home-page case where "mijn toernooien" has the right group-specific link.
+  if (tokenVariants.size) {
+    // Extract tournament ID from the hint URL so we only consider links for this tournament
+    const _thHref = (override && override.tournamentHref) || '';
+    const _tourIdM = _thHref.match(/[?&]id=([0-9a-f-]+)/i) || _thHref.match(/\/tournament\/([0-9a-f-]+)/i);
+    const _tourId = _tourIdM ? _tourIdM[1].toLowerCase() : null;
+    const groupL = groupName ? groupName.toLowerCase() : null;
+    let fpBest = null, fpScore = 0;
+    for (const a of document.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href') || '';
+      // Skip general event overview pages — that's exactly what we're trying to avoid
+      if (/event\.aspx/i.test(href)) continue;
+      // Only consider draw/tournament-style links
+      if (!/\/tournament\//i.test(href) && !/draw\.aspx/i.test(href)) continue;
+      // If we know the tournament ID, skip links for other tournaments
+      if (_tourId && !href.toLowerCase().includes(_tourId)) continue;
+      const txt = (a.textContent || '').trim().toLowerCase();
+      let sc = 0;
+      for (const tv of tokenVariants) { if (txt.includes(tv)) { sc += 60; break; } }
+      if (!sc) continue;
+      if (groupL && txt.includes(groupL)) sc += 80;
+      if (/\/Draw\//i.test(href) || /draw\.aspx/i.test(href)) sc += 20;
+      if (sc > fpScore) { fpScore = sc; fpBest = a; }
+    }
+    // Require category+group match when group is known; otherwise category+draw match
+    if (fpBest && fpScore >= (groupL ? 140 : 80)) {
+      window.location.href = toAbsUrl(fpBest.getAttribute('href'));
+      return;
+    }
+  }
+
   // Helper to fetch a URL and return a parsed document, or null
   async function fetchDoc(url) {
     try {
@@ -191,26 +240,8 @@ async function goToOverviewForCurrentEvent(override) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
-    // Candidate links inside the components list (often in table.ruler)
-    const candidates = Array.from(doc.querySelectorAll('table.ruler a.nav-link, table.ruler a, .module__content a, .components-list a'));
-
-    // Build token variants to match the category more robustly (e.g., 'GD5' -> 'gd5','gd 5','gd-5')
-    const tokenVariants = new Set();
-    const raw = (eventType || rawTitle || '').toString();
-    try {
-      const m = raw.match(/\b(GD|HD|DD|DE|HE)\s*-?\s*(\d+)\b/i);
-      if (m) {
-        const base = (m[1] || '').toLowerCase();
-        const num = (m[2] || '').toLowerCase();
-        if (base && num) {
-          tokenVariants.add((base + num).toLowerCase());
-          tokenVariants.add((base + ' ' + num).toLowerCase());
-          tokenVariants.add((base + '-' + num).toLowerCase());
-        }
-      }
-    } catch (e) {}
-    // If no explicit token found, fallback to entire rawTitle lowered
-    if (!tokenVariants.size && rawTitle) tokenVariants.add(rawTitle.toLowerCase());
+    // Candidate links — include Draw and event.aspx links in addition to component lists
+    const candidates = Array.from(doc.querySelectorAll('table.ruler a.nav-link, table.ruler a, .module__content a, .components-list a, a[href*="/Draw/"], a[href*="event.aspx"]'));
 
     let best = null; let bestScore = 0;
     const wantNorm = (rawTitle || eventType || '').toLowerCase();
@@ -234,10 +265,11 @@ async function goToOverviewForCurrentEvent(override) {
         if (wantNorm && txt.includes(wantNorm)) score += 40;
         // prefer 'Tennis' prefix or similar sport mentions
         if (/tennis/.test(txt) && /tennis/.test(wantNorm)) score += 10;
-        // prefer anchors that lead to event.aspx or have an explicit href fragment indicating a component
         const href = a.getAttribute('href') || '';
-        if (/event\.aspx/i.test(href)) score += 20;
+        if (/\/Draw\//i.test(href)) score += 25;         // specific draw > general event page
+        if (/event\.aspx/i.test(href)) score += 5;      // reduced — often the group-less overview
         if (/onderdeel|onderdelen/i.test(href)) score += 30;
+        if (groupName && txt.includes(groupName.toLowerCase())) score += 80;
         // small boost for links inside table.ruler rows / components lists
         if (a.closest && a.closest('table.ruler, .components-list, .module__list')) score += 6;
         if (score > bestScore) { bestScore = score; best = a; }
@@ -247,6 +279,15 @@ async function goToOverviewForCurrentEvent(override) {
     if (!best) {
       alert(`Kon het onderdeel voor "${rawTitle || eventType}" niet vinden op de Onderdelen-pagina.`);
       return;
+    }
+
+    // If the winning link is a general event.aspx page but we know the specific group,
+    // try to find a more targeted Draw link for that group on the same onderdelen page.
+    if (groupName && /event\.aspx/i.test(best.getAttribute('href') || '')) {
+      const groupL = groupName.toLowerCase();
+      const groupDraw = Array.from(doc.querySelectorAll('a[href*="/Draw/"]'))
+        .find(a => (a.textContent || '').trim().toLowerCase().includes(groupL));
+      if (groupDraw) best = groupDraw;
     }
 
     const rawHref = best.getAttribute('href') || '';
@@ -344,10 +385,8 @@ function addGoToOverviewMainBanner() {
         if (titleNode) rawTitle = (titleNode.textContent || '').trim();
         let eventType = '';
         if (subtitleItems && subtitleItems.length) {
-          // pick the first non-empty subtitle which often contains the category token like 'Tennis GD5' or 'Tennis GD6 17+'
-          const cand = subtitleItems[0];
-          // If it contains both sport and token, use it; otherwise append sport name if available
-          eventType = cand;
+          // Join all subtitle items so group info ("Groep B") is included even when it's a separate item
+          eventType = subtitleItems.join(' ').trim();
         }
         // Fallback: if eventType empty, try to infer from rawTitle by searching for GD/HD/DD/DE/HE etc.
         if (!eventType) {
