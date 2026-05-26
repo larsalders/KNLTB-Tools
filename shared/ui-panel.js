@@ -227,8 +227,7 @@
       }
     });
 
-    minimizeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
+    const doMinimize = () => {
       // Create dock button
       let dockBtn = document.getElementById('knltb-dock-btn');
       if (!dockBtn) {
@@ -255,6 +254,12 @@
         panel.style.display = 'flex';
         dockBtn.remove();
       };
+    };
+
+    minimizeBtn.addEventListener('click', (e) => { e.stopPropagation(); doMinimize(); });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && panel.style.display !== 'none') doMinimize();
     });
   }
 
