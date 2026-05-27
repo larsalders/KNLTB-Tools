@@ -129,3 +129,9 @@ change   = K × (expected − 1)   // winner; loser gets the inverse
 ```
 
 For doubles, both team members receive the same rating change. Changes are applied sequentially in chronological order, so each match reflects ratings updated by all prior results.
+
+---
+
+## A note on AI
+
+This project was built with the help of AI (Claude). I work in IT and understand how software works, but I am not a developer by profession — and without AI assistance I simply would not have been able to build this. I think that's worth being transparent about. If you're in a similar position and curious how something works or why a certain approach was taken, feel free to ask.
