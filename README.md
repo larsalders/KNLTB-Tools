@@ -11,7 +11,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 - [Features at a glance](#features-at-a-glance)
 - [Draw page — match rating simulator](#draw-page--match-rating-simulator)
 - [Home page — navigation shortcuts](#home-page--navigation-shortcuts)
-- [Player profile — rating chart](#player-profile--rating-chart)
+- [Player profile — rating chart & match history](#player-profile--rating-chart--match-history)
 - [Installation](#installation)
 - [Project structure](#project-structure)
 - [Rating model](#rating-model)
@@ -24,7 +24,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 |------|-------------|
 | **Draw / group page** | Floating panel: match importer, win % calculator, rating simulator, manual adjustments |
 | **Home page** | *Go to overview* shortcuts on categories and the next-match banner; *Rating* shortcut button |
-| **Player profile** | Interactive rating history chart with trend lines and manual-adjustment markers |
+| **Player profile** | Interactive rating history chart with trend lines and a sortable match history table |
 
 ---
 
@@ -32,7 +32,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 
 Active on any tournament draw or group page that has a player registration table. A floating, resizable panel appears automatically.
 
-<img src="README-p1.png" width="100%" alt="Draw page showing match table with ratings and win percentages">
+<img src="assets/draw-panel.png" width="100%" alt="Draw page showing match table with ratings and win percentages">
 
 ### Importing matches
 
@@ -75,26 +75,34 @@ Below the match table, a compact overview shows every player's starting rating, 
 
 ## Home page — navigation shortcuts
 
-<img src="README-p3.png" width="49%" alt="Go to overview button next to a scheduled category"> <img src="README-p4.png" width="49%" alt="Go to overview button on the Volgende wedstrijd banner">
+<img src="assets/home-categories.png" width="49%" alt="Go to overview button next to a scheduled category"> <img src="assets/home-next-match.png" width="49%" alt="Go to overview button on the Volgende wedstrijd banner">
 
 - **Go to overview** buttons appear next to each scheduled category (e.g. *Tennis HE6 - Groep A*), linking directly to that category's event overview page
 - A **Go to overview** button is added to the *Volgende wedstrijd* (next match) banner
 
-<img src="README-p5.png" width="60%" alt="Rating button added next to Mijn prestaties on the player profile page">
+<img src="assets/home-rating-button.png" width="60%" alt="Rating button added next to Mijn prestaties on the player profile page">
 
 - A **Rating** button is added next to *Mijn prestaties* on the player profile page, jumping straight to your rating history
 
 ---
 
-## Player profile — rating chart
+## Player profile — rating chart & match history
 
 Active on `mijnknltb.toernooi.nl/player-profile/*/Rating`.
 
-<img src="README-p2.png" width="100%" alt="Player profile showing interactive rating history chart">
+### Rating chart
+
+<img src="assets/rating-chart.png" width="100%" alt="Player profile showing interactive rating history chart">
 
 An interactive chart of your rating over time, split by category: **Singles** (blue) · **Doubles** (green) · **Padel** (orange). Each series includes a dashed linear-regression trend line (hidden by default — click the legend to enable). Manual rating adjustments are marked directly on the chart.
 
 Hover over any data point for full match details: date, tournament/round, opponent names, set scores, and rating impact. Click a legend item to toggle a category on/off; the Y-axis rescales automatically.
+
+### Match history table
+
+<img src="assets/profile-matches.png" width="49%" alt="Match history table sorted by date"> <img src="assets/profile-matches-sorted.png" width="49%" alt="Match history table sorted by impact">
+
+A sortable table of all imported matches per category (Singles / Doubles / Padel). Click any column header to sort — the **Impact** column is particularly useful for spotting your best and worst results at a glance. Row colours indicate win (green) or loss (red).
 
 ---
 
@@ -114,13 +122,14 @@ The extension activates automatically on `mijnknltb.toernooi.nl`.
 ```
 manifest.json              Chrome extension manifest (MV3)
 icon.png                   Extension icon
+assets/                    Screenshots used in this README
 pages/
   draw.js                  Entry point for draw / group pages
   draw-import.js           Match and player data fetching
   draw-parser.js           HTML parsing for draw data
   draw-state.js            Rating simulation state
   draw-ui.js               Draw panel UI rendering
-  player-profile.js        Player profile page (rating chart)
+  player-profile.js        Player profile page (rating chart + match table)
 shared/
   knltb-utils.js           Shared utilities (name normalisation, rating helpers, date parsing)
   ui-panel.js              Shared floating panel / button components
