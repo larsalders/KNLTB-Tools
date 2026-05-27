@@ -384,6 +384,10 @@ function addGoToOverviewButton() {
 // Add a Go to overview button into the main upcoming-match banner when present
 function addGoToOverviewMainBanner() {
   try {
+    // Do not inject on player profile pages — their head-to-head section also uses
+    // .comparison-block--inversed but it is unrelated to a match schedule overview.
+    if (/\/player-profile\//i.test(window.location.pathname)) return;
+
     // Look for the main 'Volgende wedstrijd' comparison block
     const banner = document.querySelector('.comparison-block--inversed');
     if (!banner) return;
