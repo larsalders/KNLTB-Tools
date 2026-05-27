@@ -1135,6 +1135,10 @@ async function findAllSimilarCategories() {
       setProgress(catsDone, categoryEntries.length, txt || targetHref, 'Category');
       try {
         if (processedCategoryUrls.has(targetHref)) { _log('[DSS] Skipping already-processed category', targetHref); return null; }
+        // Mark as processed immediately (before the first await) to prevent a race condition
+        // where a concurrent worker's sub-group-following code fetches this same URL before
+        // this worker's own fetch completes and adds it at the end of the mapper.
+        processedCategoryUrls.add(targetHref);
         if (categoryFetchCount >= MAX_CATEGORY_FETCHES) { console.warn('[DSS] MAX_CATEGORY_FETCHES reached; skipping', targetHref); return null; }
         if (!window._dssFindAllRunning) { _log('[DSS] findAllSimilarCategories: aborted by user before fetching', targetHref); return null; }
         _log('[DSS] Fetching category page', targetHref);
@@ -1233,7 +1237,7 @@ async function findAllSimilarCategories() {
           _log('[DSS] Extracted', extracted.length, 'matches from', targetHref);
         }
 
-        try { processedCategoryUrls.add(targetHref); } catch (e) {}
+        // (processedCategoryUrls.add already called before first await, above)
         try { discoveredCategoryUrls.add(targetHref); } catch (e) {}
         categoryFetchCount++;
         if (categoryFetchCount % 8 === 0) {
