@@ -430,7 +430,8 @@
         pointRadius: 0,
         fill: false,
         tension: 0,
-        showLine: true
+        showLine: true,
+        hidden: true
       };
     }).filter(Boolean);
 
