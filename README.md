@@ -1,39 +1,40 @@
 # KNLTB Tools
 
-A Chrome extension that adds interactive rating tools to [MijnKNLTB](https://mijnknltb.toernooi.nl). Simulate rating changes, analyse match history, and navigate the site more efficiently.
-
-## Table of contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Project structure](#project-structure)
-- [Rating model](#rating-model)
+A Chrome extension that adds interactive rating tools to [MijnKNLTB](https://mijnknltb.toernooi.nl) — simulate rating changes, analyse match history, and navigate the site more efficiently.
 
 ---
 
-## Features
+## Features at a glance
 
-### Draw page — match rating simulator
+| Page | What's added |
+|------|-------------|
+| **Draw / group page** | Floating panel: match importer, win % calculator, rating simulator, manual adjustments |
+| **Home page** | *Go to overview* shortcuts on categories and the next-match banner; *Rating* shortcut button |
+| **Player profile** | Interactive rating history chart with trend lines and manual-adjustment markers |
 
-Active on any tournament draw/group page with a player registration table. A floating, resizable panel appears with the following tools.
+---
 
-![Draw page showing match table with ratings and win percentages](README-p1.png)
+## Draw page — match rating simulator
 
-![Draw page showing season graph](README-p2.png)
+Active on any tournament draw or group page that has a player registration table. A floating, resizable panel appears automatically.
 
-**Importing matches**
+<img src="README-p1.png" width="100%" alt="Draw page showing match table with ratings and win percentages">
+
+### Importing matches
 
 | Button | What it does |
 |--------|--------------|
-| **Show Matches** | Loads all matches from the current group draw page |
-| **Find All** | Scans all similar categories across the tournament and collects matches from every group page |
-| **Refresh Ratings** | Re-fetches the current rating for every player by visiting their profile pages |
+| **Show Matches** | Loads all matches from the current draw / group page |
+| **Find All** | Scans every player's profile to discover similar categories across all tournaments, then collects matches from each group page found |
+| **Refresh Ratings** | Re-fetches each player's current rating from their profile page |
 
-All three show a live progress bar, e.g. `Processing player 3 of 14: Lars Alders (21%)`.
+All three operations show a live progress indicator, e.g. `Processing player 3 of 14: Lars Alders (21%)`.
 
-**Match table columns:** Date/Time · Team 1 & Team 2 with starting ratings · Avg team rating (doubles only) · Win % · Category (Find All only) · Result
+### Match table
 
-**Selecting a winner:** Click a team name to mark them as the winner — the cell turns green, the loser red, and each player's name updates with their new rating:
+Columns: **Date/Time** · **Team 1 & 2** with starting ratings · **Avg rating** (doubles) · **Win %** · **Category** (Find All only) · **Result**
+
+**Selecting a winner:** Click a team name to mark them as the winner — that cell turns green, the other red, and each player's name updates with their new simulated rating:
 
 ```
 Lars Alders (7.6971 → 7.7240) ▲0.0269
@@ -41,32 +42,45 @@ Lars Alders (7.6971 → 7.7240) ▲0.0269
 
 Click the winning team again to deselect and reset.
 
-**Player Rating Summary:** Below the match table, a compact overview shows every player's starting rating, current simulated rating, and cumulative change across all entered results.
+### Player Rating Summary
 
-**Manual controls:**
-- **Player dropdown + Add Match** — manually add a match between any two players or pairs in the draw
+Below the match table, a compact overview shows every player's starting rating, current simulated rating, and cumulative change across all entered results.
+
+### Manual controls
+
+- **Add Match** — manually add a match between any two players or pairs in the draw
 - **Set Rating** — override a player's starting rating when the listed value is outdated
 
----
+### Panel shortcuts
 
-### Main page — navigation shortcuts
-
-- **Go to overview** buttons are injected next to each scheduled category (e.g. *Tennis HE6 - Groep A*), linking directly to that category's event overview
-  ![**Go to overview** buttons are injected next to each scheduled category (e.g. *Tennis HE6 - Groep A*), linking directly to that category's event overview](README-p4.png)
-- A **Go to overview** button is added to the "Volgende wedstrijd" banner
-  ![A **Go to overview** button is added to the "Volgende wedstrijd" banner](README-p3.png)
-- A **Rating** button is added next to "Mijn prestaties", jumping straight to your rating history page
-  ![A **Rating** button is added next to "Mijn prestaties", jumping straight to your rating history page](README-p5.png)
+| Key | Action |
+|-----|--------|
+| `Esc` | Minimise / restore the panel to the dock |
 
 ---
 
-### Player profile — rating chart
+## Home page — navigation shortcuts
+
+<img src="README-p3.png" width="49%" alt="Go to overview button next to a scheduled category"> <img src="README-p4.png" width="49%" alt="Go to overview button on the Volgende wedstrijd banner">
+
+- **Go to overview** buttons appear next to each scheduled category (e.g. *Tennis HE6 - Groep A*), linking directly to that category's event overview page
+- A **Go to overview** button is added to the *Volgende wedstrijd* (next match) banner
+
+<img src="README-p5.png" width="60%" alt="Rating button added next to Mijn prestaties on the player profile page">
+
+- A **Rating** button is added next to *Mijn prestaties* on the player profile page, jumping straight to your rating history
+
+---
+
+## Player profile — rating chart
 
 Active on `mijnknltb.toernooi.nl/player-profile/*/Rating`.
 
-An interactive chart of your rating over time, split by category: **Singles** (blue) · **Doubles** (green) · **Padel** (orange). Each series includes a dashed linear regression trend line.
+<img src="README-p2.png" width="100%" alt="Player profile showing interactive rating history chart">
 
-Hover over a data point for full match details: date, tournament/round, opponent names, set scores, and rating impact. Click a legend item to toggle a category; the Y-axis rescales automatically.
+An interactive chart of your rating over time, split by category: **Singles** (blue) · **Doubles** (green) · **Padel** (orange). Each series includes a dashed linear-regression trend line. Manual rating adjustments are marked directly on the chart.
+
+Hover over any data point for full match details: date, tournament/round, opponent names, set scores, and rating impact. Click a legend item to toggle a category on/off; the Y-axis rescales automatically.
 
 ---
 
@@ -87,7 +101,7 @@ The extension activates automatically on `mijnknltb.toernooi.nl`.
 manifest.json              Chrome extension manifest (MV3)
 icon.png                   Extension icon
 pages/
-  draw.js                  Entry point for draw/group pages
+  draw.js                  Entry point for draw / group pages
   draw-import.js           Match and player data fetching
   draw-parser.js           HTML parsing for draw data
   draw-state.js            Rating simulation state
@@ -105,7 +119,7 @@ lib/
 
 ## Rating model
 
-The extension uses a logistic model consistent with the KNLTB DSS system:
+The extension uses the logistic model from the KNLTB DSS system:
 
 ```
 K        = 0.275
@@ -114,4 +128,4 @@ expected = 1 / (1 + exp(q × (ratingTeam1 − ratingTeam2)))
 change   = K × (expected − 1)   // winner; loser gets the inverse
 ```
 
-For doubles, both team members receive the same rating change. Changes are computed sequentially in chronological order, so later matches reflect updated ratings from earlier ones.
+For doubles, both team members receive the same rating change. Changes are applied sequentially in chronological order, so each match reflects ratings updated by all prior results.
