@@ -1,6 +1,20 @@
 # KNLTB Tools
 
-A Chrome extension that adds interactive rating tools to [MijnKNLTB](https://mijnknltb.toernooi.nl) — simulate rating changes, analyse match history, and navigate the site more efficiently.
+A browser extension that adds interactive rating tools to [MijnKNLTB](https://mijnknltb.toernooi.nl) — simulate rating changes, analyse match history, and navigate the site more efficiently.
+
+> **A note on AI** — This project was built with the help of AI (Claude). I work in IT and understand how software works, but I am not a developer by profession — and without AI assistance I simply would not have been able to build this. I think that's worth being transparent about. If you're in a similar position and curious how something works or why a certain approach was taken, feel free to ask.
+
+---
+
+## Table of contents
+
+- [Features at a glance](#features-at-a-glance)
+- [Draw page — match rating simulator](#draw-page--match-rating-simulator)
+- [Home page — navigation shortcuts](#home-page--navigation-shortcuts)
+- [Player profile — rating chart](#player-profile--rating-chart)
+- [Installation](#installation)
+- [Project structure](#project-structure)
+- [Rating model](#rating-model)
 
 ---
 
@@ -78,7 +92,7 @@ Active on `mijnknltb.toernooi.nl/player-profile/*/Rating`.
 
 <img src="README-p2.png" width="100%" alt="Player profile showing interactive rating history chart">
 
-An interactive chart of your rating over time, split by category: **Singles** (blue) · **Doubles** (green) · **Padel** (orange). Each series includes a dashed linear-regression trend line. Manual rating adjustments are marked directly on the chart.
+An interactive chart of your rating over time, split by category: **Singles** (blue) · **Doubles** (green) · **Padel** (orange). Each series includes a dashed linear-regression trend line (hidden by default — click the legend to enable). Manual rating adjustments are marked directly on the chart.
 
 Hover over any data point for full match details: date, tournament/round, opponent names, set scores, and rating impact. Click a legend item to toggle a category on/off; the Y-axis rescales automatically.
 
@@ -129,9 +143,3 @@ change   = K × (expected − 1)   // winner; loser gets the inverse
 ```
 
 For doubles, both team members receive the same rating change. Changes are applied sequentially in chronological order, so each match reflects ratings updated by all prior results.
-
----
-
-## A note on AI
-
-This project was built with the help of AI (Claude). I work in IT and understand how software works, but I am not a developer by profession — and without AI assistance I simply would not have been able to build this. I think that's worth being transparent about. If you're in a similar position and curious how something works or why a certain approach was taken, feel free to ask.
