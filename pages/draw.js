@@ -91,11 +91,39 @@ function injectCategoryOverviewButtons() {
     btn.textContent = 'Go to overview';
     btn.title = a.href;
     btn.style.cssText = 'margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;border-radius:4px;background:#193291;color:#fff;border:none;cursor:pointer;vertical-align:middle;line-height:1.6;white-space:nowrap;';
-    btn.onclick = (e) => {
+    btn.onclick = async (e) => {
       e.preventDefault();
       e.stopPropagation();
+
+      const drawHref = toAbsUrl(a.getAttribute('href') || '');
+      const tourIdM = drawHref.match(/\/tournament\/([0-9a-f-]+)/i);
+      const tourId = tourIdM ? tourIdM[1] : null;
+
+      // 1. Check if the current page already has an event.aspx link for this tournament
+      if (tourId) {
+        const pageLink = document.querySelector(`a[href*="event.aspx"][href*="${tourId}"], a[href*="event.aspx"][href*="${tourId.toLowerCase()}"]`);
+        if (pageLink) {
+          window.location.href = toAbsUrl(pageLink.getAttribute('href'));
+          return;
+        }
+      }
+
+      // 2. Fetch the draw page and extract the event.aspx link from it
+      try {
+        const r = await fetch(drawHref, { credentials: 'include' });
+        if (r.ok) {
+          const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+          const eventLink = doc.querySelector('a[href*="event.aspx"]');
+          if (eventLink) {
+            window.location.href = new URL(eventLink.getAttribute('href'), drawHref).href;
+            return;
+          }
+        }
+      } catch (e) {}
+
+      // 3. Fallback to the slow-path, bypassing the fast-path that would re-navigate to the draw
       const linkText = a.textContent.trim();
-      goToOverviewForCurrentEvent({ rawTitle: linkText, eventType: normalizeEventTitle(linkText), tournamentHref: a.href });
+      goToOverviewForCurrentEvent({ rawTitle: linkText, eventType: normalizeEventTitle(linkText), tournamentHref: drawHref, skipFastPath: true });
     };
     a.after(btn);
   });
@@ -154,7 +182,7 @@ async function goToOverviewForCurrentEvent(override) {
 
   // Fast path: find a draw link on the current page that matches the category (+group).
   // Covers the home-page case where "mijn toernooien" has the right group-specific link.
-  if (tokenVariants.size) {
+  if (tokenVariants.size && !(override && override.skipFastPath)) {
     // Extract tournament ID from the hint URL so we only consider links for this tournament
     const _thHref = (override && override.tournamentHref) || '';
     const _tourIdM = _thHref.match(/[?&]id=([0-9a-f-]+)/i) || _thHref.match(/\/tournament\/([0-9a-f-]+)/i);
