@@ -2,7 +2,7 @@
 
 A browser extension that adds interactive rating tools to [MijnKNLTB](https://mijnknltb.toernooi.nl) — simulate rating changes, analyse match history, and navigate the site more efficiently.
 
-> **A note on AI** — This project was built with the help of AI (Claude). I work in IT and understand how software works, but I am not a developer by profession — and without AI assistance I simply would not have been able to build this. I think that's worth being transparent about. If you're in a similar position and curious how something works or why a certain approach was taken, feel free to ask.
+> **A note on AI** — This project was built with the help of AI (Claude). I work in IT and understand how software works, but I am not a developer by profession — and without AI assistance I simply would not have been able to build this. I think that's worth being transparent about.
 
 ---
 
