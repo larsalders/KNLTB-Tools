@@ -685,37 +685,33 @@
                 const isDoubles = myRtgs.length > 1 || oppRtgs.length > 1;
                 const myAvgR  = fmtRtg(avgRating(myRtgs));
                 const oppAvgR = fmtRtg(avgRating(oppRtgs));
-                const avgRow  = isDoubles && (myAvgR || oppAvgR)
-                  ? `<div style="display:flex; gap:16px; margin-bottom:6px; opacity:.8; font-size:11px;">
-                      ${myAvgR  ? `<span>My avg <strong>${myAvgR}</strong></span>`  : ''}
-                      ${oppAvgR ? `<span>Opp avg <strong>${oppAvgR}</strong></span>` : ''}
-                    </div>`
-                  : '';
 
                 // Win probability + hypothetical opposite impact
                 const K_RTG = 0.275, Q_RTG = 2.012;
                 const avgMeNum  = avgRating(myRtgs);
                 const avgOppNum = avgRating(oppRtgs);
-                let winProbRow = '';
+                let winProbSpan = '', hypSpan = '';
                 if (avgMeNum !== null && avgOppNum !== null) {
                   const winProb = 1 / (1 + Math.exp(Q_RTG * (avgMeNum - avgOppNum)));
-                  const winProbPct = (winProb * 100).toFixed(1) + '%';
-                  let hypStr = '', hypColor = '';
+                  winProbSpan = `<span style="opacity:.8;">Win% <strong>${(winProb * 100).toFixed(1)}%</strong></span>`;
                   if (impactNum !== null && meta.result) {
-                    const hypImpact = meta.result === 'W'
-                      ? K_RTG * winProb
-                      : K_RTG * (winProb - 1);
+                    const hypImpact = meta.result === 'W' ? K_RTG * winProb : K_RTG * (winProb - 1);
                     const sign = hypImpact >= 0 ? '+' : '';
-                    hypStr = sign + hypImpact.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-                    hypColor = hypImpact < 0 ? '#0a7f2e' : '#b00020';
+                    const hypStr = sign + hypImpact.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+                    const hypColor = hypImpact < 0 ? '#0a7f2e' : '#b00020';
+                    const hypLabel = meta.result === 'W' ? 'If lost' : 'If won';
+                    hypSpan = `<span style="opacity:.8;">${hypLabel}: <strong style="color:${hypColor};">${hypStr}</strong></span>`;
                   }
-                  const hypLabel = meta.result === 'W' ? 'If lost' : 'If won';
-                  winProbRow = `
-                    <div style="display:flex; gap:16px; margin-top:4px; font-size:11px; opacity:.85;">
-                      <span style="opacity:.8;">Win% <strong>${winProbPct}</strong></span>
-                      ${hypStr ? `<span style="opacity:.8;">${hypLabel}: <strong style="color:${hypColor};">${hypStr}</strong></span>` : ''}
-                    </div>`;
                 }
+
+                const statsRow = (isDoubles && (myAvgR || oppAvgR)) || winProbSpan
+                  ? `<div style="display:flex; gap:16px; margin-bottom:6px; font-size:11px; opacity:.85; flex-wrap:wrap;">
+                      ${isDoubles && myAvgR  ? `<span>My avg <strong>${myAvgR}</strong></span>`  : ''}
+                      ${isDoubles && oppAvgR ? `<span>Opp avg <strong>${oppAvgR}</strong></span>` : ''}
+                      ${winProbSpan}
+                      ${hypSpan}
+                    </div>`
+                  : '';
 
                 el.innerHTML = `
                   <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
@@ -727,12 +723,11 @@
                     <div style="${winnerIsMe ? 'font-weight:600;' : ''}">${teamA}</div>${myCells}
                     <div style="${(!winnerIsMe && meta.result === 'L') ? 'font-weight:600;' : ''}">${teamB}</div>${oppCells}
                   </div>
-                  ${avgRow}
+                  ${statsRow}
                   <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
                     <div><span style="opacity:.7;">Rating</span> <strong>${ratingStr}</strong></div>
                     ${impactStr !== null ? `<div style="font-weight:600; color:${impactColor};">${impactStr}</div>` : ''}
                   </div>
-                  ${winProbRow}
                 `;
               }
 
