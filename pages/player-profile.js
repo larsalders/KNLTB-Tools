@@ -1121,6 +1121,37 @@
       const lostSet1 = matches.filter(m => (m.meta.sets || []).length > 0 && m.meta.sets[0][0] < m.meta.sets[0][1]);
       const comebackWins = lostSet1.filter(m => m.meta.result === 'W').length;
 
+      // Win % vs higher/lower rated (lower value = better in KNLTB)
+      const vsHigher = matches.filter(m => {
+        const oppAvg = avgRating(m.meta.oppTeamRatings);
+        return oppAvg !== null && m.rating !== null && oppAvg < m.rating;
+      });
+      const vsHigherWins = vsHigher.filter(m => m.meta.result === 'W').length;
+
+      const vsLower = matches.filter(m => {
+        const oppAvg = avgRating(m.meta.oppTeamRatings);
+        return oppAvg !== null && m.rating !== null && oppAvg > m.rating;
+      });
+      const vsLowerWins = vsLower.filter(m => m.meta.result === 'W').length;
+
+      // Longest win streak (chronological)
+      const byDate = matches.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+      let longestStreak = 0, streak = 0;
+      byDate.forEach(m => {
+        if (m.meta.result === 'W') { streak++; longestStreak = Math.max(longestStreak, streak); }
+        else streak = 0;
+      });
+
+      // 3-set match rate
+      const withSetsData = matches.filter(m => (m.meta.sets || []).length > 0);
+      const threeSetCount = withSetsData.filter(m => m.meta.sets.length >= 3).length;
+
+      // Best rating reached (lowest value = best in KNLTB)
+      const afterRatings = matches
+        .filter(m => m.rating !== null && m.meta.impact !== null && m.meta.impact !== undefined)
+        .map(m => m.rating + m.meta.impact);
+      const bestRating = afterRatings.length ? Math.min(...afterRatings) : null;
+
       return {
         n, wins,
         matchWin: { pct: pct(wins, n), n, wins },
@@ -1128,7 +1159,12 @@
         set2: setStats(1),
         set3: setStats(2),
         games: { pct: pct(gWon, gTotal), won: gWon, lost: gTotal - gWon },
-        comeback: { pct: pct(comebackWins, lostSet1.length), n: lostSet1.length, wins: comebackWins }
+        comeback: { pct: pct(comebackWins, lostSet1.length), n: lostSet1.length, wins: comebackWins },
+        vsHigher: { pct: pct(vsHigherWins, vsHigher.length), n: vsHigher.length, wins: vsHigherWins },
+        vsLower: { pct: pct(vsLowerWins, vsLower.length), n: vsLower.length, wins: vsLowerWins },
+        longestStreak,
+        threeSet: { pct: pct(threeSetCount, withSetsData.length), n: withSetsData.length, count: threeSetCount },
+        bestRating
       };
     }
 
@@ -1254,8 +1290,27 @@
         donut(stats.set2.pct,     '2nd Set Win %', stats.set2.n ? `${stats.set2.wins}/${stats.set2.n}` : null),
         donut(stats.set3.pct,     '3rd Set Win %', stats.set3.n ? `${stats.set3.wins}/${stats.set3.n} deciders` : 'no deciders'),
         donut(stats.comeback.pct, 'Comeback Rate', stats.comeback.n ? `${stats.comeback.wins}/${stats.comeback.n} after losing 1st` : 'n/a'),
+        donut(stats.vsHigher.pct, 'vs Higher Rtd', stats.vsHigher.n ? `${stats.vsHigher.wins}/${stats.vsHigher.n} matches` : 'no data'),
+        donut(stats.vsLower.pct,  'vs Lower Rtd',  stats.vsLower.n  ? `${stats.vsLower.wins}/${stats.vsLower.n} matches`  : 'no data'),
+        donut(stats.threeSet.pct, '3-Set Rate',    stats.threeSet.n ? `${stats.threeSet.count}/${stats.threeSet.n} matches` : null),
       ].join('');
       container.appendChild(grid);
+
+      function statCard(label, value, sub) {
+        return `<div style="background:#f7f8fc; border-radius:6px; padding:8px 10px; text-align:center;">
+          <div style="font-size:10px; color:#777; margin-bottom:3px;">${label}</div>
+          <div style="font-size:16px; font-weight:700; color:#222; line-height:1;">${value}</div>
+          ${sub ? `<div style="font-size:10px; color:#aaa; margin-top:3px;">${sub}</div>` : ''}
+        </div>`;
+      }
+
+      const highlights = document.createElement("div");
+      highlights.style.cssText = "display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 0 8px; border-top:1px solid #f0f0f0; margin-top:4px;";
+      highlights.innerHTML = [
+        statCard('Best Rating', stats.bestRating !== null ? stats.bestRating.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '—', 'season low'),
+        statCard('Longest Win Streak', stats.longestStreak > 0 ? `${stats.longestStreak} in a row` : '—', null),
+      ].join('');
+      container.appendChild(highlights);
       requestAnimationFrame(fitPanelToContent);
     }
 
