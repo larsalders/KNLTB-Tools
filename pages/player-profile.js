@@ -661,24 +661,36 @@
                   <div><span style="opacity:.7;">Estimated rating</span> <strong>${ratingStr}</strong></div>
                 `;
               } else {
-                const teamA = (meta.myTeam || []).join(" & ");
-                const teamB = (meta.oppTeam || []).join(" & ");
-                const myGames = (meta.sets || []).map(([a]) => a);
+                const myRtgs  = meta.myTeamRatings  || [];
+                const oppRtgs = meta.oppTeamRatings || [];
+                const teamA = (meta.myTeam  || []).map((n, j) => nameWithRating(n, myRtgs[j])).join(" & ");
+                const teamB = (meta.oppTeam || []).map((n, j) => nameWithRating(n, oppRtgs[j])).join(" & ");
+                const myGames  = (meta.sets || []).map(([a]) => a);
                 const oppGames = (meta.sets || []).map(([,b]) => b);
 
                 const baseChip = 'display:inline-block; padding:0 6px; border-radius:6px; background:#f1f3f5; margin-left:6px; font-size:11px; line-height:18px; min-width:18px; text-align:center;';
                 const winnerIsMe = meta.result === 'W';
-                const myChip = winnerIsMe ? baseChip + ' font-weight:600;' : baseChip;
+                const myChip  = winnerIsMe ? baseChip + ' font-weight:600;' : baseChip;
                 const oppChip = (!winnerIsMe && meta.result === 'L') ? baseChip + ' font-weight:600;' : baseChip;
 
                 const setsCount = Math.max(myGames.length, oppGames.length);
-                const gridCols = setsCount > 0 ? `auto ${Array(setsCount).fill('max-content').join(' ')}` : 'auto';
-                const myCells = myGames.map(n => `<div><span style="${myChip}">${n}</span></div>`).join('');
+                const gridCols  = setsCount > 0 ? `auto ${Array(setsCount).fill('max-content').join(' ')}` : 'auto';
+                const myCells  = myGames.map(n => `<div><span style="${myChip}">${n}</span></div>`).join('');
                 const oppCells = oppGames.map(n => `<div><span style="${oppChip}">${n}</span></div>`).join('');
 
                 const impactNum = typeof meta.impact === 'number' ? meta.impact : null;
                 const impactStr = impactNum !== null ? (impactNum >= 0 ? `+${impactNum.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : impactNum.toLocaleString(undefined, { maximumFractionDigits: 4 })) : null;
                 const impactColor = impactNum === null ? '#666' : (impactNum < 0 ? '#0a7f2e' : '#b00020');
+
+                const isDoubles = myRtgs.length > 1 || oppRtgs.length > 1;
+                const myAvgR  = fmtRtg(avgRating(myRtgs));
+                const oppAvgR = fmtRtg(avgRating(oppRtgs));
+                const avgRow  = isDoubles && (myAvgR || oppAvgR)
+                  ? `<div style="display:flex; gap:16px; margin-bottom:6px; opacity:.8; font-size:11px;">
+                      ${myAvgR  ? `<span>My avg <strong>${myAvgR}</strong></span>`  : ''}
+                      ${oppAvgR ? `<span>Opp avg <strong>${oppAvgR}</strong></span>` : ''}
+                    </div>`
+                  : '';
 
                 el.innerHTML = `
                   <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
@@ -690,6 +702,7 @@
                     <div style="${winnerIsMe ? 'font-weight:600;' : ''}">${teamA}</div>${myCells}
                     <div style="${(!winnerIsMe && meta.result === 'L') ? 'font-weight:600;' : ''}">${teamB}</div>${oppCells}
                   </div>
+                  ${avgRow}
                   <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
                     <div><span style="opacity:.7;">Rating</span> <strong>${ratingStr}</strong></div>
                     ${impactStr !== null ? `<div style="font-weight:600; color:${impactColor};">${impactStr}</div>` : ''}
