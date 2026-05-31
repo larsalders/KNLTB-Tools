@@ -409,6 +409,22 @@ function addGoToOverviewButton() {
   }
 }
 
+// Returns true when the banner's tournament ID appears in the "mijn toernooien" category links,
+// meaning the upcoming match is a tournament match rather than regular competition.
+function bannerBelongsToTournament(banner) {
+  const tourA = banner.querySelector('a[href*="/tournament"], a[href*="tournament.aspx"]');
+  if (!tourA) return false;
+  const tourHref = tourA.getAttribute('href') || '';
+  const m = tourHref.match(/\/tournament\/([0-9a-f-]+)/i) || tourHref.match(/[?&]id=([0-9a-f-]+)/i);
+  if (!m) return false;
+  const tourId = m[1].toLowerCase();
+  const catLinks = document.querySelectorAll('div.module__content ul > li > h4 > span > a[href*="/tournament/"]');
+  for (const a of catLinks) {
+    if ((a.getAttribute('href') || '').toLowerCase().includes(tourId)) return true;
+  }
+  return false;
+}
+
 // Add a Go to overview button into the main upcoming-match banner when present
 function addGoToOverviewMainBanner() {
   try {
@@ -421,6 +437,9 @@ function addGoToOverviewMainBanner() {
     if (!banner) return;
     // Avoid adding twice
     if (document.getElementById('dss-go-overview-main')) return;
+
+    // Only show for tournament matches, not regular competition
+    if (!bannerBelongsToTournament(banner)) return;
 
     const btn = document.createElement('button');
     btn.id = 'dss-go-overview-main';
@@ -558,12 +577,17 @@ try {
   bannerObserver.observe(document.body, { childList: true, subtree: true });
 } catch (e) {}
 
-// Observe for dynamically loaded schedule content and inject category overview buttons
+// Observe for dynamically loaded schedule content and inject category overview buttons.
+// Also retries the banner button in case the banner was already present but the
+// "mijn toernooien" links hadn't loaded yet when addGoToOverviewMainBanner first ran.
 try {
   let _catBtnTimer = null;
   const catObserver = new MutationObserver(() => {
     clearTimeout(_catBtnTimer);
-    _catBtnTimer = setTimeout(() => { try { injectCategoryOverviewButtons(); } catch (e) {} }, 250);
+    _catBtnTimer = setTimeout(() => {
+      try { injectCategoryOverviewButtons(); } catch (e) {}
+      try { addGoToOverviewMainBanner(); } catch (e) {}
+    }, 250);
   });
   catObserver.observe(document.body, { childList: true, subtree: true });
 } catch (e) {}
