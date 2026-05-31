@@ -770,7 +770,7 @@
     })();
 
     chartVisible = true;
-    if (_chartBtn) _chartBtn.textContent = '📊 Hide Rating Chart';
+    if (_chartBtn) _chartBtn.textContent = '📊 Hide Chart';
   }
 
   function hideChart() {
@@ -786,7 +786,7 @@
     const panel = document.getElementById("ratingPanel");
     if (panel) { panel.style.flex = "0 0 auto"; panel.style.minHeight = "20px"; }
     chartVisible = false;
-    if (_chartBtn) _chartBtn.textContent = '📊 Show Rating Chart';
+    if (_chartBtn) _chartBtn.textContent = '📊 Chart';
     fitPanelToContent();
   }
 
@@ -840,7 +840,7 @@
     if (tableVisible && existing) {
       existing.remove();
       tableVisible = false;
-      if (_tableBtn) _tableBtn.textContent = '📋 Show Matches';
+      if (_tableBtn) _tableBtn.textContent = '📋 Matches';
       fitPanelToContent();
       return;
     }
@@ -1082,7 +1082,7 @@
     if (statsVisible && existing) {
       existing.remove();
       statsVisible = false;
-      if (_statsBtn) _statsBtn.textContent = '📈 Season Stats';
+      if (_statsBtn) _statsBtn.textContent = '📈 Stats';
       fitPanelToContent();
       return;
     }
@@ -1098,6 +1098,7 @@
     container.style.width = "100%";
 
     let currentCat = categories.find(cat => allSeasonMatches[cat].length > 0) || "singles";
+    let selectedPartner = '';
 
     function pct(num, denom) {
       return denom > 0 ? (num / denom) * 100 : null;
@@ -1151,7 +1152,7 @@
         : '';
       return `
         <div style="display:flex; flex-direction:column; align-items:center; gap:3px;">
-          <svg width="72" height="72" viewBox="0 0 72 72">
+          <svg viewBox="0 0 72 72" style="width:100%; height:auto; display:block;">
             <circle cx="36" cy="36" r="${r}" fill="none" stroke="#f0f0f0" stroke-width="7"/>
             ${arc}
             <text x="36" y="40" text-anchor="middle" font-size="13" font-weight="bold" fill="#222">${txt}</text>
@@ -1181,7 +1182,59 @@
       });
       container.appendChild(tabRow);
 
-      const stats = computeStats(allSeasonMatches[currentCat]);
+      // Partner filter — doubles only
+      if (currentCat === 'doubles') {
+        const doublesMatches = allSeasonMatches['doubles'];
+        const partnerSet = new Set();
+        doublesMatches.forEach(m => {
+          const profIdx = m.meta.profilePlayerIdx ?? 0;
+          const name = (m.meta.myTeam || [])[profIdx === 0 ? 1 : 0];
+          if (name) partnerSet.add(name);
+        });
+        const partners = [...partnerSet].sort();
+
+        if (partners.length > 1) {
+          const filterRow = document.createElement('div');
+          filterRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px;';
+          const lbl = document.createElement('label');
+          lbl.textContent = 'Partner:';
+          lbl.style.cssText = 'font-size:11px; color:#555; white-space:nowrap;';
+          const sel = document.createElement('select');
+          sel.style.cssText = 'font-size:11px; padding:2px 6px; border:1px solid #ccc; border-radius:4px; cursor:pointer; flex:1;';
+          const allOpt = document.createElement('option');
+          allOpt.value = '';
+          allOpt.textContent = 'All partners';
+          sel.appendChild(allOpt);
+          partners.forEach(p => {
+            const count = doublesMatches.filter(m => {
+              const profIdx = m.meta.profilePlayerIdx ?? 0;
+              return (m.meta.myTeam || [])[profIdx === 0 ? 1 : 0] === p;
+            }).length;
+            const opt = document.createElement('option');
+            opt.value = p;
+            opt.textContent = `${p} (${count})`;
+            if (p === selectedPartner) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.onchange = () => { selectedPartner = sel.value; renderStats(); };
+          filterRow.appendChild(lbl);
+          filterRow.appendChild(sel);
+          container.appendChild(filterRow);
+        }
+      } else {
+        selectedPartner = '';
+      }
+
+      // Filter matches by partner when applicable
+      let matchesToUse = allSeasonMatches[currentCat];
+      if (currentCat === 'doubles' && selectedPartner) {
+        matchesToUse = matchesToUse.filter(m => {
+          const profIdx = m.meta.profilePlayerIdx ?? 0;
+          return (m.meta.myTeam || [])[profIdx === 0 ? 1 : 0] === selectedPartner;
+        });
+      }
+
+      const stats = computeStats(matchesToUse);
 
       if (!stats) {
         const msg = document.createElement("div");
@@ -1195,12 +1248,12 @@
       const grid = document.createElement("div");
       grid.style.cssText = "display:grid; grid-template-columns:repeat(3, 1fr); gap:14px 8px; padding:4px 0 8px;";
       grid.innerHTML = [
-        donut(stats.matchWin.pct, 'Match Win %',    `${stats.matchWin.wins}/${stats.matchWin.n} matches`),
-        donut(stats.games.pct,    'Games Won %',    `${stats.games.won}–${stats.games.lost} games`),
-        donut(stats.set1.pct,     '1st Set Win %',  stats.set1.n  ? `${stats.set1.wins}/${stats.set1.n}`  : null),
-        donut(stats.set2.pct,     '2nd Set Win %',  stats.set2.n  ? `${stats.set2.wins}/${stats.set2.n}`  : null),
-        donut(stats.set3.pct,     '3rd Set Win %',  stats.set3.n  ? `${stats.set3.wins}/${stats.set3.n} deciders`  : 'no deciders'),
-        donut(stats.comeback.pct, 'Comeback Rate',  stats.comeback.n ? `${stats.comeback.wins}/${stats.comeback.n} after losing 1st` : 'n/a'),
+        donut(stats.matchWin.pct, 'Match Win %',   `${stats.matchWin.wins}/${stats.matchWin.n} matches`),
+        donut(stats.games.pct,    'Games Won %',   `${stats.games.won}–${stats.games.lost} games`),
+        donut(stats.set1.pct,     '1st Set Win %', stats.set1.n ? `${stats.set1.wins}/${stats.set1.n}` : null),
+        donut(stats.set2.pct,     '2nd Set Win %', stats.set2.n ? `${stats.set2.wins}/${stats.set2.n}` : null),
+        donut(stats.set3.pct,     '3rd Set Win %', stats.set3.n ? `${stats.set3.wins}/${stats.set3.n} deciders` : 'no deciders'),
+        donut(stats.comeback.pct, 'Comeback Rate', stats.comeback.n ? `${stats.comeback.wins}/${stats.comeback.n} after losing 1st` : 'n/a'),
       ].join('');
       container.appendChild(grid);
       requestAnimationFrame(fitPanelToContent);
@@ -1228,7 +1281,7 @@
     btnRow.style.gap = '8px';
     btnRow.style.flexWrap = 'wrap';
 
-    const importBtn = window.KNLTBPanel.createButton('📥 Import Season', 'Import matches from this season', {
+    const importBtn = window.KNLTBPanel.createButton('📥 Import', 'Import matches from this season', {
       background: '#193291', color: '#fff'
     });
     importBtn.onclick = () => {
@@ -1236,15 +1289,15 @@
       expandAllDetails(parseSeasonMatches);
     };
 
-    const processBtn = window.KNLTBPanel.createButton('📊 Show Rating Chart', 'Toggle rating chart');
+    const processBtn = window.KNLTBPanel.createButton('📊 Chart', 'Toggle rating chart');
     _chartBtn = processBtn;
     processBtn.onclick = () => { chartVisible ? hideChart() : processMatches(); };
 
-    const tableBtn = window.KNLTBPanel.createButton('📋 Show Matches', 'Toggle matches table');
+    const tableBtn = window.KNLTBPanel.createButton('📋 Matches', 'Toggle matches table');
     _tableBtn = tableBtn;
     tableBtn.onclick = showMatchesTable;
 
-    const statsBtn = window.KNLTBPanel.createButton('📈 Season Stats', 'Toggle season stats');
+    const statsBtn = window.KNLTBPanel.createButton('📈 Stats', 'Toggle season stats');
     _statsBtn = statsBtn;
     statsBtn.onclick = showSeasonStats;
 
