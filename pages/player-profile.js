@@ -9,8 +9,10 @@
 
   let chartVisible = false;
   let tableVisible = false;
+  let statsVisible = false;
   let _chartBtn = null;
   let _tableBtn = null;
+  let _statsBtn = null;
   let _panel = null;
   let _contentWrap = null;
 
@@ -1068,6 +1070,149 @@
     if (contentWrap) contentWrap.appendChild(container);
   }
 
+  function showSeasonStats() {
+    const categories = ["singles", "doubles", "padel"];
+
+    if (categories.every(cat => allSeasonMatches[cat].length === 0)) {
+      alert("No matches imported yet.");
+      return;
+    }
+
+    const existing = document.getElementById("knltbStatsPanel");
+    if (statsVisible && existing) {
+      existing.remove();
+      statsVisible = false;
+      if (_statsBtn) _statsBtn.textContent = '📈 Season Stats';
+      fitPanelToContent();
+      return;
+    }
+
+    statsVisible = true;
+    if (_statsBtn) _statsBtn.textContent = '📈 Hide Stats';
+
+    const container = document.createElement("div");
+    container.id = "knltbStatsPanel";
+    container.style.marginTop = "10px";
+    container.style.paddingTop = "6px";
+    container.style.borderTop = "1px solid #eee";
+    container.style.width = "100%";
+
+    let currentCat = categories.find(cat => allSeasonMatches[cat].length > 0) || "singles";
+
+    function pct(num, denom) {
+      return denom > 0 ? (num / denom) * 100 : null;
+    }
+
+    function computeStats(matches) {
+      if (!matches.length) return null;
+      const n = matches.length;
+      const wins = matches.filter(m => m.meta.result === 'W').length;
+
+      function setStats(idx) {
+        const withSet = matches.filter(m => (m.meta.sets || []).length > idx);
+        const sw = withSet.filter(m => m.meta.sets[idx][0] > m.meta.sets[idx][1]).length;
+        return { pct: pct(sw, withSet.length), n: withSet.length, wins: sw };
+      }
+
+      let gWon = 0, gTotal = 0;
+      matches.forEach(m => (m.meta.sets || []).forEach(([a, b]) => { gWon += a; gTotal += a + b; }));
+
+      const lostSet1 = matches.filter(m => (m.meta.sets || []).length > 0 && m.meta.sets[0][0] < m.meta.sets[0][1]);
+      const comebackWins = lostSet1.filter(m => m.meta.result === 'W').length;
+
+      return {
+        n, wins,
+        matchWin: { pct: pct(wins, n), n, wins },
+        set1: setStats(0),
+        set2: setStats(1),
+        set3: setStats(2),
+        games: { pct: pct(gWon, gTotal), won: gWon, lost: gTotal - gWon },
+        comeback: { pct: pct(comebackWins, lostSet1.length), n: lostSet1.length, wins: comebackWins }
+      };
+    }
+
+    function arcColor(p) {
+      if (p === null || !Number.isFinite(p)) return '#ddd';
+      if (p >= 55) return '#22a84a';
+      if (p >= 45) return '#f5a623';
+      return '#d93025';
+    }
+
+    function donut(p, label, sub) {
+      const r = 28, circ = 2 * Math.PI * r;
+      const safe = (p !== null && Number.isFinite(p)) ? Math.max(0, Math.min(100, p)) : 0;
+      const dash = (safe / 100) * circ;
+      const color = arcColor(p);
+      const txt = p !== null && Number.isFinite(p) ? p.toFixed(0) + '%' : '—';
+      const arc = safe > 0
+        ? `<circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="7"
+             stroke-dasharray="${dash.toFixed(2)} ${circ.toFixed(2)}" stroke-linecap="round"
+             transform="rotate(-90 36 36)"/>`
+        : '';
+      return `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:3px;">
+          <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="${r}" fill="none" stroke="#f0f0f0" stroke-width="7"/>
+            ${arc}
+            <text x="36" y="40" text-anchor="middle" font-size="13" font-weight="bold" fill="#222">${txt}</text>
+          </svg>
+          <div style="font-size:11px; text-align:center; color:#333; font-weight:600; line-height:1.3;">${label}</div>
+          ${sub ? `<div style="font-size:10px; text-align:center; color:#999; line-height:1.2;">${sub}</div>` : ''}
+        </div>`;
+    }
+
+    function renderStats() {
+      container.innerHTML = '';
+
+      const tabRow = document.createElement("div");
+      tabRow.style.cssText = "display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap;";
+      categories.forEach(cat => {
+        const count = allSeasonMatches[cat].length;
+        const active = cat === currentCat;
+        const tab = document.createElement("button");
+        tab.textContent = `${cat.charAt(0).toUpperCase() + cat.slice(1)} (${count})`;
+        tab.style.cssText = `padding:3px 10px; border-radius:4px; cursor:pointer; font-size:11px;
+          border:${active ? "2px solid #193291" : "1px solid #ccc"};
+          background:${active ? "#193291" : "#fff"};
+          color:${active ? "#fff" : "#333"};
+          font-weight:${active ? "600" : "400"};`;
+        tab.onclick = () => { currentCat = cat; renderStats(); };
+        tabRow.appendChild(tab);
+      });
+      container.appendChild(tabRow);
+
+      const stats = computeStats(allSeasonMatches[currentCat]);
+
+      if (!stats) {
+        const msg = document.createElement("div");
+        msg.textContent = "No matches in this category.";
+        msg.style.cssText = "padding:8px 6px; color:#aaa; font-size:12px;";
+        container.appendChild(msg);
+        requestAnimationFrame(fitPanelToContent);
+        return;
+      }
+
+      const grid = document.createElement("div");
+      grid.style.cssText = "display:grid; grid-template-columns:repeat(3, 1fr); gap:14px 8px; padding:4px 0 8px;";
+      grid.innerHTML = [
+        donut(stats.matchWin.pct, 'Match Win %',    `${stats.matchWin.wins}/${stats.matchWin.n} matches`),
+        donut(stats.games.pct,    'Games Won %',    `${stats.games.won}–${stats.games.lost} games`),
+        donut(stats.set1.pct,     '1st Set Win %',  stats.set1.n  ? `${stats.set1.wins}/${stats.set1.n}`  : null),
+        donut(stats.set2.pct,     '2nd Set Win %',  stats.set2.n  ? `${stats.set2.wins}/${stats.set2.n}`  : null),
+        donut(stats.set3.pct,     '3rd Set Win %',  stats.set3.n  ? `${stats.set3.wins}/${stats.set3.n} deciders`  : 'no deciders'),
+        donut(stats.comeback.pct, 'Comeback Rate',  stats.comeback.n ? `${stats.comeback.wins}/${stats.comeback.n} after losing 1st` : 'n/a'),
+      ].join('');
+      container.appendChild(grid);
+      requestAnimationFrame(fitPanelToContent);
+    }
+
+    renderStats();
+
+    const ratingPanel = document.getElementById("ratingPanel");
+    const contentWrap = ratingPanel ? ratingPanel.parentElement : document.getElementById("knltb-tools-panel");
+    if (contentWrap) contentWrap.appendChild(container);
+  }
+
   function injectButtons() {
     const { panel, contentWrap } = window.KNLTBPanel.createStandardPanel('KNLTB Tools - Player Profile', {
       id: 'knltb-tools-panel',
@@ -1099,9 +1244,14 @@
     _tableBtn = tableBtn;
     tableBtn.onclick = showMatchesTable;
 
+    const statsBtn = window.KNLTBPanel.createButton('📈 Season Stats', 'Toggle season stats');
+    _statsBtn = statsBtn;
+    statsBtn.onclick = showSeasonStats;
+
     btnRow.appendChild(importBtn);
     btnRow.appendChild(processBtn);
     btnRow.appendChild(tableBtn);
+    btnRow.appendChild(statsBtn);
     contentWrap.appendChild(btnRow);
 
     const status = document.createElement("div");
