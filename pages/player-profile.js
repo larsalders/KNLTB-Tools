@@ -692,6 +692,31 @@
                     </div>`
                   : '';
 
+                // Win probability + hypothetical opposite impact
+                const K_RTG = 0.275, Q_RTG = 2.012;
+                const avgMeNum  = avgRating(myRtgs);
+                const avgOppNum = avgRating(oppRtgs);
+                let winProbRow = '';
+                if (avgMeNum !== null && avgOppNum !== null) {
+                  const winProb = 1 / (1 + Math.exp(Q_RTG * (avgMeNum - avgOppNum)));
+                  const winProbPct = (winProb * 100).toFixed(1) + '%';
+                  let hypStr = '', hypColor = '';
+                  if (impactNum !== null && meta.result) {
+                    const hypImpact = meta.result === 'W'
+                      ? K_RTG * winProb
+                      : K_RTG * (winProb - 1);
+                    const sign = hypImpact >= 0 ? '+' : '';
+                    hypStr = sign + hypImpact.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+                    hypColor = hypImpact < 0 ? '#0a7f2e' : '#b00020';
+                  }
+                  const hypLabel = meta.result === 'W' ? 'If lost' : 'If won';
+                  winProbRow = `
+                    <div style="display:flex; gap:16px; margin-top:4px; font-size:11px; opacity:.85;">
+                      <span style="opacity:.8;">Win% <strong>${winProbPct}</strong></span>
+                      ${hypStr ? `<span style="opacity:.8;">${hypLabel}: <strong style="color:${hypColor};">${hypStr}</strong></span>` : ''}
+                    </div>`;
+                }
+
                 el.innerHTML = `
                   <div style="margin-bottom:6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
                     <div style="font-weight:600; font-size:12px;">${dateStr}</div>
@@ -707,6 +732,7 @@
                     <div><span style="opacity:.7;">Rating</span> <strong>${ratingStr}</strong></div>
                     ${impactStr !== null ? `<div style="font-weight:600; color:${impactColor};">${impactStr}</div>` : ''}
                   </div>
+                  ${winProbRow}
                 `;
               }
 
