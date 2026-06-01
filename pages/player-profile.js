@@ -1006,7 +1006,6 @@
           ? `${myStartRtg} → ${myEndRtg}`
           : (myStartRtg ?? "—");
 
-        // Partner: name (rating)  — the other player in my row
         const partnerIdx  = profIdx === 0 ? 1 : 0;
         const partnerName = (m.meta.myTeam || [])[partnerIdx];
         const partnerText = partnerName

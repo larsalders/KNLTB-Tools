@@ -21,6 +21,7 @@
         "shared/knltb-utils.js",
         "shared/ui-panel.js",
         "pages/player-profile.js",
+        "pages/rating-tooltips.js",
         "lib/chart.min.js",
         "lib/chartjs-adapter-date-fns.bundle.min.js"
       ]
@@ -30,6 +31,7 @@
       "js": [
         "shared/knltb-utils.js",
         "shared/ui-panel.js",
+        "pages/rating-tooltips.js",
         "pages/draw-state.js",
         "pages/draw-parser.js",
         "pages/draw-ui.js",
