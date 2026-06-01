@@ -1146,6 +1146,12 @@
       const withSetsData = matches.filter(m => (m.meta.sets || []).length > 0);
       const threeSetCount = withSetsData.filter(m => m.meta.sets.length >= 3).length;
 
+      // Match win conversion after winning 1st or 2nd set
+      const wonSet1 = matches.filter(m => (m.meta.sets || []).length > 0 && m.meta.sets[0][0] > m.meta.sets[0][1]);
+      const wonSet1ThenMatch = wonSet1.filter(m => m.meta.result === 'W').length;
+      const wonSet2 = matches.filter(m => (m.meta.sets || []).length > 1 && m.meta.sets[1][0] > m.meta.sets[1][1]);
+      const wonSet2ThenMatch = wonSet2.filter(m => m.meta.result === 'W').length;
+
       // Best rating reached (lowest value = best in KNLTB)
       const afterRatings = matches
         .filter(m => m.rating !== null && m.meta.impact !== null && m.meta.impact !== undefined)
@@ -1164,6 +1170,8 @@
         vsLower: { pct: pct(vsLowerWins, vsLower.length), n: vsLower.length, wins: vsLowerWins },
         longestStreak,
         threeSet: { pct: pct(threeSetCount, withSetsData.length), n: withSetsData.length, count: threeSetCount },
+        set1Conv: { pct: pct(wonSet1ThenMatch, wonSet1.length), n: wonSet1.length, wins: wonSet1ThenMatch },
+        set2Conv: { pct: pct(wonSet2ThenMatch, wonSet2.length), n: wonSet2.length, wins: wonSet2ThenMatch },
         bestRating
       };
     }
@@ -1290,9 +1298,11 @@
         donut(stats.set2.pct,     '2nd Set Win %', stats.set2.n ? `${stats.set2.wins}/${stats.set2.n}` : null),
         donut(stats.set3.pct,     '3rd Set Win %', stats.set3.n ? `${stats.set3.wins}/${stats.set3.n} deciders` : 'no deciders'),
         donut(stats.comeback.pct, 'Comeback Rate', stats.comeback.n ? `${stats.comeback.wins}/${stats.comeback.n} after losing 1st` : 'n/a'),
-        donut(stats.vsHigher.pct, 'vs Higher Rtd', stats.vsHigher.n ? `${stats.vsHigher.wins}/${stats.vsHigher.n} matches` : 'no data'),
-        donut(stats.vsLower.pct,  'vs Lower Rtd',  stats.vsLower.n  ? `${stats.vsLower.wins}/${stats.vsLower.n} matches`  : 'no data'),
-        donut(stats.threeSet.pct, '3-Set Rate',    stats.threeSet.n ? `${stats.threeSet.count}/${stats.threeSet.n} matches` : null),
+        donut(stats.vsHigher.pct,  'vs Higher Rtd',      stats.vsHigher.n  ? `${stats.vsHigher.wins}/${stats.vsHigher.n} matches`  : 'no data'),
+        donut(stats.vsLower.pct,   'vs Lower Rtd',       stats.vsLower.n   ? `${stats.vsLower.wins}/${stats.vsLower.n} matches`   : 'no data'),
+        donut(stats.threeSet.pct,  '3-Set Rate',         stats.threeSet.n  ? `${stats.threeSet.count}/${stats.threeSet.n} matches` : null),
+        donut(stats.set1Conv.pct,  'Win After S1 Win',   stats.set1Conv.n  ? `${stats.set1Conv.wins}/${stats.set1Conv.n} converted` : 'n/a'),
+        donut(stats.set2Conv.pct,  'Win After S2 Win',   stats.set2Conv.n  ? `${stats.set2Conv.wins}/${stats.set2Conv.n} converted` : 'n/a'),
       ].join('');
       container.appendChild(grid);
 
