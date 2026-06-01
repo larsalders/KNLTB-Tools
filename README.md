@@ -116,7 +116,7 @@ A sortable table of all imported matches per category (Singles / Doubles / Padel
 
 ### Season stats
 
-<img src="assets/season-stats.png" width="100%" alt="Season stats panel showing 11 donut charts with performance metrics">
+<img src="assets/season-stats.png" width="50%" alt="Season stats panel showing 11 donut charts with performance metrics">
 
 A panel of 11 donut charts giving a quick visual read of your season. Open it with the **📈 Stats** button; the panel expands to fill the screen when maximised.
 
