@@ -10,6 +10,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 
 - [Features at a glance](#features-at-a-glance)
 - [Draw page — match rating simulator](#draw-page--match-rating-simulator)
+- [All pages — player rating tooltips](#all-pages--player-rating-tooltips)
 - [Home page — navigation shortcuts](#home-page--navigation-shortcuts)
 - [Player profile — rating chart & match history](#player-profile--rating-chart--match-history)
 - [Installation](#installation)
@@ -24,7 +25,8 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 |------|-------------|
 | **Draw / group page** | Floating panel: match importer, win % calculator, rating simulator, manual adjustments |
 | **Home page** | *Go to overview* shortcuts on categories and the next-match banner; *Rating* shortcut button |
-| **Player profile** | Interactive rating history chart with trend lines and a sortable match history table |
+| **All pages** | Hover any player name link to see their singles, doubles, and padel ratings in a tooltip |
+| **Player profile** | Interactive rating history chart with trend lines, a sortable match history table, and a season stats panel with 11 performance metrics |
 
 ---
 
@@ -73,6 +75,14 @@ Below the match table, a compact overview shows every player's starting rating, 
 
 ---
 
+## All pages — player rating tooltips
+
+<img src="assets/rating-tooltip.png" width="60%" alt="Tooltip showing singles, doubles, and padel ratings when hovering a player name">
+
+Hover over any player name that links to a profile page to see their current singles, doubles, and padel ratings in a tooltip. Works on match listings, the home page, draw pages — anywhere on `mijnknltb.toernooi.nl`. Ratings are fetched on first hover and cached for the rest of the session.
+
+---
+
 ## Home page — navigation shortcuts
 
 <img src="assets/home-categories.png" width="49%" alt="Go to overview button next to a scheduled category"> <img src="assets/home-next-match.png" width="49%" alt="Go to overview button on the Volgende wedstrijd banner">
@@ -104,6 +114,24 @@ Hover over any data point for full match details: date, tournament/round, oppone
 
 A sortable table of all imported matches per category (Singles / Doubles / Padel). Click any column header to sort — the **Impact** column is particularly useful for spotting your best and worst results at a glance. Row colours indicate win (green) or loss (red).
 
+### Season stats
+
+<img src="assets/season-stats.png" width="100%" alt="Season stats panel showing 11 donut charts with performance metrics">
+
+A panel of 11 donut charts giving a quick visual read of your season. Open it with the **📈 Stats** button; the panel expands to fill the screen when maximised.
+
+| Metric | Description |
+|--------|-------------|
+| **Match Win %** | Overall win rate |
+| **Games Won %** | Games won across all sets |
+| **1st / 2nd / 3rd Set Win %** | Win rate per set |
+| **Win After S1/S2 Win** | Match conversion rate after winning that set |
+| **Comeback Rate** | Win rate in matches where you lost the first set |
+| **vs Higher / Lower Rated** | Win rate against opponents rated above or below you |
+| **3-Set Rate** | Share of matches that went to a deciding set |
+
+Colour coding: **green** ≥ 55 % · **orange** 45–54 % · **red** < 45 %. Switch between Singles, Doubles, and Padel with the tabs; Doubles adds a partner filter.
+
 ---
 
 ## Installation
@@ -129,7 +157,8 @@ pages/
   draw-parser.js           HTML parsing for draw data
   draw-state.js            Rating simulation state
   draw-ui.js               Draw panel UI rendering
-  player-profile.js        Player profile page (rating chart + match table)
+  player-profile.js        Player profile page (rating chart, match table, season stats)
+  rating-tooltips.js       Player rating tooltips injected on all pages
 shared/
   knltb-utils.js           Shared utilities (name normalisation, rating helpers, date parsing)
   ui-panel.js              Shared floating panel / button components
