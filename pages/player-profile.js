@@ -1091,10 +1091,7 @@
 
     const container = document.createElement("div");
     container.id = "knltbStatsPanel";
-    container.style.marginTop = "10px";
-    container.style.paddingTop = "6px";
-    container.style.borderTop = "1px solid #eee";
-    container.style.width = "100%";
+    container.style.cssText = "margin-top:10px; padding-top:6px; border-top:1px solid #eee; width:100%; display:flex; flex-direction:column; flex:1; min-height:0;";
 
     let currentCat = categories.find(cat => allSeasonMatches[cat].length > 0) || "singles";
     let selectedPartner = '';
@@ -1194,14 +1191,14 @@
              transform="rotate(-90 36 36)"/>`
         : '';
       return `
-        <div style="display:flex; flex-direction:column; align-items:center; gap:3px;">
-          <svg viewBox="0 0 72 72" style="width:100%; height:auto; display:block;">
+        <div style="display:flex; flex-direction:column; align-items:center; gap:3px; min-height:0; padding:4px 0;">
+          <svg viewBox="0 0 72 72" style="flex:1; min-height:0; width:auto; max-width:100%; display:block;">
             <circle cx="36" cy="36" r="${r}" fill="none" stroke="#f0f0f0" stroke-width="7"/>
             ${arc}
             <text x="36" y="40" text-anchor="middle" font-size="13" font-weight="bold" fill="#222">${txt}</text>
           </svg>
-          <div style="font-size:11px; text-align:center; color:#333; font-weight:600; line-height:1.3;">${label}</div>
-          ${sub ? `<div style="font-size:10px; text-align:center; color:#999; line-height:1.2;">${sub}</div>` : ''}
+          <div style="font-size:11px; text-align:center; color:#333; font-weight:600; line-height:1.3; flex-shrink:0;">${label}</div>
+          ${sub ? `<div style="font-size:10px; text-align:center; color:#999; line-height:1.2; flex-shrink:0;">${sub}</div>` : ''}
         </div>`;
     }
 
@@ -1209,7 +1206,7 @@
       container.innerHTML = '';
 
       const tabRow = document.createElement("div");
-      tabRow.style.cssText = "display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap;";
+      tabRow.style.cssText = "flex-shrink:0; display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap;";
       categories.forEach(cat => {
         const count = allSeasonMatches[cat].length;
         const active = cat === currentCat;
@@ -1238,7 +1235,7 @@
 
         if (partners.length > 1) {
           const filterRow = document.createElement('div');
-          filterRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:8px;';
+          filterRow.style.cssText = 'flex-shrink:0; display:flex; align-items:center; gap:8px; margin-bottom:8px;';
           const lbl = document.createElement('label');
           lbl.textContent = 'Partner:';
           lbl.style.cssText = 'font-size:11px; color:#555; white-space:nowrap;';
@@ -1289,7 +1286,7 @@
       }
 
       const grid = document.createElement("div");
-      grid.style.cssText = "display:grid; grid-template-columns:repeat(3, 1fr); gap:14px 8px; padding:4px 0 8px;";
+      grid.style.cssText = "display:grid; grid-template-columns:repeat(3, 1fr); grid-auto-rows:minmax(80px, 1fr); flex:1; min-height:0; gap:14px 8px; padding:4px 0 8px;";
       grid.innerHTML = [
         donut(stats.matchWin.pct, 'Match Win %',   `${stats.matchWin.wins}/${stats.matchWin.n} matches`),
         donut(stats.games.pct,    'Games Won %',   `${stats.games.won}–${stats.games.lost} games`),
@@ -1314,7 +1311,7 @@
       }
 
       const highlights = document.createElement("div");
-      highlights.style.cssText = "display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 0 8px; border-top:1px solid #f0f0f0; margin-top:4px;";
+      highlights.style.cssText = "flex-shrink:0; display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:4px 0 8px; border-top:1px solid #f0f0f0; margin-top:4px;";
       highlights.innerHTML = [
         statCard('Best Rating', stats.bestRating !== null ? stats.bestRating.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '—', 'season low'),
         statCard('Longest Win Streak', stats.longestStreak > 0 ? `${stats.longestStreak} in a row` : '—', null),
