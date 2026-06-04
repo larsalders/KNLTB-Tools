@@ -4,9 +4,7 @@
   "version": "2.0",
   "description": "Adds interactive elements to various KNLTB pages to allow for faster and more realistic rating calculations and visualizations.",
   "permissions": [
-    "activeTab",
-    "storage",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
     "*://mijnknltb.toernooi.nl/*"
