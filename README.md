@@ -11,6 +11,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 - [Roadmap](#roadmap)
 - [Features at a glance](#features-at-a-glance)
 - [Draw page — match rating simulator](#draw-page--match-rating-simulator)
+- [Category page — sortable player table](#category-page--sortable-player-table)
 - [All pages — player rating tooltips](#all-pages--player-rating-tooltips)
 - [Home page — navigation shortcuts](#home-page--navigation-shortcuts)
 - [Player profile — rating chart & match history](#player-profile--rating-chart--match-history)
@@ -33,6 +34,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 | Page | What's added |
 |------|-------------|
 | **Draw / group page** | Floating panel: match importer, win % calculator, rating simulator, manual adjustments |
+| **Category page** | Player registration table sortable by individual rating and team average rating |
 | **Home page** | *Go to overview* shortcuts on categories and the next-match banner; *Rating* shortcut button |
 | **All pages** | Hover any player name link to see their singles, doubles, and padel ratings in a tooltip |
 | **Player profile** | Interactive rating history chart with trend lines, a sortable match history table, and a season stats panel with 11 performance metrics |
@@ -81,6 +83,12 @@ Below the match table, a compact overview shows every player's starting rating, 
 | Key | Action |
 |-----|--------|
 | `Esc` | Minimise / restore the panel to the dock |
+
+---
+
+## Category page — sortable player table
+
+Active on any category page that lists registered players (*Onderdelen* / *Schema's* tab). The player registration table gets sortable column headers: click **Rating** to rank players by their individual rating, or **Team avg** to rank doubles pairs by their combined average. Useful before a tournament starts, when the default order is not sorted by rating.
 
 ---
 
