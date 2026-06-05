@@ -6,6 +6,10 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 
 ---
 
+![KNLTB Tools in action](assets/video.gif)
+
+---
+
 ## Table of contents
 
 - [Roadmap](#roadmap)
