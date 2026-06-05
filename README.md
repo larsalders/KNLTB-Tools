@@ -145,6 +145,12 @@ Colour coding: **green** ≥ 55 % · **orange** 45–54 % · **red** < 45 %. Swi
 
 ## Installation
 
+### Chrome Web Store (recommended)
+
+Install directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/knltb-tools/emmhdkcchcmgbpflohecdllhollepalh) — no developer mode required.
+
+### Manual (developer)
+
 1. Clone or download this repository.
 2. Open Chrome and go to `chrome://extensions`.
 3. Enable **Developer mode** (top-right toggle).
