@@ -26,6 +26,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 | Feature | Status | Notes |
 |---------|--------|-------|
 | **Padel rating prediction** | Planned | The padel rating calculation changed on 1 January 2025; the current simulator uses the tennis model. This feature will implement the new padel-specific formula so predictions are accurate for padel matches. |
+| **Apple App Store release** | On hold | The extension works on iPhone and is shelf-ready, but publishing requires an Apple Developer subscription ($100/year). Not currently worth the investment, so this is parked for now. |
 
 ---
 
