@@ -8,6 +8,7 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 
 ## Table of contents
 
+- [Roadmap](#roadmap)
 - [Features at a glance](#features-at-a-glance)
 - [Draw page — match rating simulator](#draw-page--match-rating-simulator)
 - [All pages — player rating tooltips](#all-pages--player-rating-tooltips)
@@ -16,6 +17,14 @@ A browser extension that adds interactive rating tools to [MijnKNLTB](https://mi
 - [Installation](#installation)
 - [Project structure](#project-structure)
 - [Rating model](#rating-model)
+
+---
+
+## Roadmap
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Padel rating prediction** | Planned | The padel rating calculation changed on 1 January 2025; the current simulator uses the tennis model. This feature will implement the new padel-specific formula so predictions are accurate for padel matches. |
 
 ---
 
