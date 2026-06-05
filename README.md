@@ -90,6 +90,8 @@ Below the match table, a compact overview shows every player's starting rating, 
 
 Active on any category page that lists registered players (*Onderdelen* / *Schema's* tab). The player registration table gets sortable column headers: click **Rating** to rank players by their individual rating, or **Team avg** to rank doubles pairs by their combined average. Useful before a tournament starts, when the default order is not sorted by rating.
 
+<img src="assets/sorting.png" width="60%" alt="Player registration table with sortable Rating and Team Avg column headers">
+
 ---
 
 ## All pages — player rating tooltips
