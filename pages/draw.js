@@ -82,7 +82,10 @@ function addTeamAvgColumn() {
 }
 
 function injectCategoryOverviewButtons() {
-  const links = document.querySelectorAll('div.module__content ul > li > h4 > span > a[href]');
+  // h4 covers single-draw categories; h5 covers multi-draw categories where h4 is the label-only header
+  const links = document.querySelectorAll(
+    'div.module__content ul > li > h4 > span > a[href], div.module__content ul > li > h5 > span > a[href]'
+  );
   links.forEach(a => {
     if (a.dataset.dssOverviewBtn) return;
     a.dataset.dssOverviewBtn = '1';
@@ -418,7 +421,11 @@ function bannerBelongsToTournament(banner) {
   const m = tourHref.match(/\/tournament\/([0-9a-f-]+)/i) || tourHref.match(/[?&]id=([0-9a-f-]+)/i);
   if (!m) return false;
   const tourId = m[1].toLowerCase();
-  const catLinks = document.querySelectorAll('div.module__content ul > li > h4 > span > a[href*="/tournament/"]');
+  // Match draw links in both h4 (single-draw categories) and h5 (multi-draw categories).
+  // Draw links use /sport/draw.aspx?id=UUID format, so match by tourId rather than a path prefix.
+  const catLinks = document.querySelectorAll(
+    'div.module__content ul > li > h4 > span > a[href], div.module__content ul > li > h5 > span > a[href]'
+  );
   for (const a of catLinks) {
     if ((a.getAttribute('href') || '').toLowerCase().includes(tourId)) return true;
   }
@@ -459,23 +466,23 @@ function addGoToOverviewMainBanner() {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       try {
-        // Derive rawTitle and eventType from the banner where possible
-        const titleNode = banner.querySelector('.comparison-heading__title .nav-link__value') || banner.querySelector('.comparison-heading__title') || banner.querySelector('.comparison-heading__time');
+        // The banner title is the TOURNAMENT name; the subtitle holds the CATEGORY
+        // (e.g. "Tennis GD 17+ C (7.9403 - 8.3361)"). The overview matcher scores
+        // candidates against rawTitle, so rawTitle must be the category — not the
+        // tournament name — for the exact-title match to fire and disambiguate
+        // between sibling categories (e.g. GD 17+ A/B/C). Mirror detectCurrentEventTitles.
         const subtitleItems = Array.from(banner.querySelectorAll('.comparison-heading__subtitle .comparison-heading__subtitle-item, .comparison-heading__subtitle .list__item, .comparison-heading__subtitle-item'))
           .map(n => (n.textContent || '').trim()).filter(Boolean);
-        // Heuristic: combine title + first subtitle token if that looks like a category (e.g., 'Tennis GD5' or 'Tennis GD6 17+')
-        let rawTitle = '';
-        if (titleNode) rawTitle = (titleNode.textContent || '').trim();
-        let eventType = '';
-        if (subtitleItems && subtitleItems.length) {
-          // Join all subtitle items so group info ("Groep B") is included even when it's a separate item
-          eventType = subtitleItems.join(' ').trim();
+        // Dedupe — the subtitle repeats the category once per team. Join keeps any
+        // distinct group token ("Groep B") that may appear as a separate item.
+        const uniqueSubtitle = [...new Set(subtitleItems)];
+        let rawTitle = uniqueSubtitle.join(' ').trim();
+        // Fallback to the banner title only if no subtitle category was found
+        if (!rawTitle) {
+          const titleNode = banner.querySelector('.comparison-heading__title .nav-link__value') || banner.querySelector('.comparison-heading__title') || banner.querySelector('.comparison-heading__time');
+          if (titleNode) rawTitle = (titleNode.textContent || '').trim();
         }
-        // Fallback: if eventType empty, try to infer from rawTitle by searching for GD/HD/DD/DE/HE etc.
-        if (!eventType) {
-          const inferred = (rawTitle || '').match(/\b(GD|HD|DD|DE|HE)\b(?:\s*\d+)?/i);
-          if (inferred) eventType = inferred[0];
-        }
+        let eventType = normalizeEventTitle(rawTitle);
         // Also capture tournament link in the banner (e.g., 'Peelland toernooi 2025') so we can fetch its page
         let tournamentHref = null;
         try {
@@ -483,8 +490,8 @@ function addGoToOverviewMainBanner() {
           const tourA = banner.querySelector('.comparison-heading__title a[href], .comparison-heading__title .nav-link a[href], a.tournament__link, a[href*="/tournament"], a[href*="tournament.aspx"]');
           if (tourA) tournamentHref = tourA.getAttribute('href');
         } catch (ex) {}
-        // Call the navigation helper with the detected values and optional tournamentHref
-        goToOverviewForCurrentEvent({ rawTitle, eventType, tournamentHref });
+        // Skip the fast path so we reach the onderdelen slow path that finds event.aspx
+        goToOverviewForCurrentEvent({ rawTitle, eventType, tournamentHref, skipFastPath: true });
       } catch (ex) {
         console.warn('[DSS] banner Go to overview click failed, falling back', ex);
         goToOverviewForCurrentEvent();
