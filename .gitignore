@@ -15,3 +15,6 @@ convert-safari-command
 # Node
 node_modules/
 npm-debug.log*
+
+# tmp folder
+tmp/
