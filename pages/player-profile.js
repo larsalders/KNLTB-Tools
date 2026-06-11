@@ -15,12 +15,290 @@
   let _statsBtn = null;
   let _panel = null;
   let _contentWrap = null;
+  let dateFilter = { start: null, end: null };
+  let _dateFilterRow = null;
+  let _importBtn = null;
+  let _importAllBtn = null;
+  let _sliderMinTs = 0;
+  let _sliderMaxTs = 0;
+  let _sliderStartTs = 0;
+  let _sliderEndTs = 0;
+  let _snapDates = []; // sorted ISO date strings of all imported matches
+  let _activeTableCat = null; // remembers which tab was open in the matches table
+  let _activeStatsCat = null; // remembers which tab was open in the stats panel
 
   function setStatus(message, kind = "info") {
     const el = document.getElementById("knltbStatus");
     if (!el) return;
     el.innerHTML = message;
     el.style.color = kind === "error" ? "#b00020" : "#222";
+  }
+
+  function getFilteredMatches(cat) {
+    return allSeasonMatches[cat].filter(m => {
+      if (dateFilter.start && m.date < dateFilter.start) return false;
+      if (dateFilter.end && m.date > dateFilter.end) return false;
+      return true;
+    });
+  }
+
+  function updateFilterCount() {
+    const countEl = document.getElementById('knltbDateFilterCount');
+    if (!countEl) return;
+    const total = ["singles", "doubles", "padel"].reduce((s, cat) => s + allSeasonMatches[cat].length, 0);
+    const filtered = ["singles", "doubles", "padel"].reduce((s, cat) => s + getFilteredMatches(cat).length, 0);
+    countEl.textContent = (dateFilter.start || dateFilter.end) ? `${filtered}/${total} matches` : `${total} matches`;
+  }
+
+  function buildSliderUI() {
+    if (!_dateFilterRow) return;
+    _dateFilterRow.innerHTML = '';
+
+    function tsToIso(ts) {
+      const d = new Date(ts);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    function tsToLabel(ts) {
+      return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    function tsToFrac(ts) {
+      if (_sliderMaxTs === _sliderMinTs) return 0;
+      return (ts - _sliderMinTs) / (_sliderMaxTs - _sliderMinTs);
+    }
+    function fracToTs(f) {
+      return _sliderMinTs + Math.max(0, Math.min(1, f)) * (_sliderMaxTs - _sliderMinTs);
+    }
+    // Snap raw timestamp to the nearest actual match date.
+    const _snapTs = _snapDates.map(iso => new Date(iso).getTime());
+    function snapToNearest(rawTs) {
+      if (!_snapTs.length) return rawTs;
+      return _snapTs.reduce((best, ts) =>
+        Math.abs(ts - rawTs) < Math.abs(best - rawTs) ? ts : best
+      );
+    }
+
+    // Header row: label + count + clear button
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex; align-items:center; gap:6px; margin-bottom:5px;';
+
+    const lbl = document.createElement('span');
+    lbl.textContent = 'Filter:';
+    lbl.style.cssText = 'font-size:11px; color:#555; white-space:nowrap; font-weight:600;';
+
+    const countSpan = document.createElement('span');
+    countSpan.id = 'knltbDateFilterCount';
+    countSpan.style.cssText = 'font-size:10px; color:#888;';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '✕';
+    clearBtn.title = 'Reset date filter';
+    clearBtn.style.cssText = 'font-size:10px; padding:0 5px; line-height:16px; border:1px solid #ccc; border-radius:4px; cursor:pointer; background:#fff; color:#888; margin-left:auto;';
+
+    hdr.appendChild(lbl);
+    hdr.appendChild(countSpan);
+    hdr.appendChild(clearBtn);
+    _dateFilterRow.appendChild(hdr);
+
+    // Slider track area
+    const sliderWrap = document.createElement('div');
+    sliderWrap.style.cssText = 'position:relative; height:18px; margin:0 7px; user-select:none;';
+
+    const track = document.createElement('div');
+    track.style.cssText = 'position:absolute; left:0; right:0; top:50%; height:4px; margin-top:-2px; background:#e0e0e0; border-radius:2px;';
+
+    const fill = document.createElement('div');
+    fill.style.cssText = 'position:absolute; top:50%; height:4px; margin-top:-2px; background:#193291; border-radius:2px;';
+
+    function mkThumb() {
+      const t = document.createElement('div');
+      t.style.cssText = 'position:absolute; top:50%; width:14px; height:14px; margin-top:-7px; background:#193291; border:2px solid #fff; border-radius:50%; cursor:grab; transform:translateX(-50%); box-shadow:0 1px 4px rgba(0,0,0,.3); z-index:2;';
+      return t;
+    }
+    const startThumb = mkThumb();
+    const endThumb = mkThumb();
+
+    sliderWrap.appendChild(track);
+    sliderWrap.appendChild(fill);
+
+    // One dot per match date, colored by result, with a hover tooltip.
+    function showSliderTooltip(anchor, matches, iso) {
+      let el = document.getElementById('knltbSliderTooltip');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'knltbSliderTooltip';
+        el.style.cssText = 'position:fixed; z-index:10002; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.12); padding:8px 10px; font:12px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; color:#222; pointer-events:none; max-width:300px;';
+        document.body.appendChild(el);
+      }
+      const dateStr = new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+      const rows = matches.map((m, idx) => {
+        const catLabel = m.cat.charAt(0).toUpperCase() + m.cat.slice(1);
+        const myTeam  = (m.meta.myTeam  || []).join(' / ') || '—';
+        const oppTeam = (m.meta.oppTeam || []).join(' / ') || '—';
+        const ratingStr = m.rating !== null ? m.rating.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : '—';
+        const impactNum = typeof m.meta.impact === 'number' ? m.meta.impact : null;
+        const impactStr = impactNum !== null ? (impactNum >= 0 ? `+${impactNum.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : impactNum.toLocaleString(undefined, { maximumFractionDigits: 4 })) : null;
+        const impactColor = impactNum === null ? '#666' : (impactNum < 0 ? '#0a7f2e' : '#b00020');
+        const resultColor = m.meta.result === 'W' ? '#22a84a' : m.meta.result === 'L' ? '#d93025' : '#888';
+        const sep = idx > 0 ? '<div style="border-top:1px solid #f0f0f0;margin:5px 0;"></div>' : '';
+        return `${sep}
+          <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;margin-bottom:2px;">
+            <span style="font-weight:600;">${catLabel}</span>
+            ${m.meta.result ? `<span style="font-weight:600;color:${resultColor};">${m.meta.result === 'W' ? 'Won' : 'Lost'}</span>` : ''}
+            ${m.meta.tournament ? `<span style="opacity:.65;font-size:11px;">${m.meta.tournament}${m.meta.round ? ` – ${m.meta.round}` : ''}</span>` : ''}
+          </div>
+          <div style="opacity:.7;font-size:11px;margin-bottom:3px;">${myTeam} vs ${oppTeam}</div>
+          <div style="display:flex;gap:10px;align-items:baseline;">
+            <span><span style="opacity:.7;">Rating</span> <strong>${ratingStr}</strong></span>
+            ${impactStr !== null ? `<span style="font-weight:600;color:${impactColor};">${impactStr}</span>` : ''}
+          </div>`;
+      }).join('');
+      el.innerHTML = `<div style="font-weight:600;margin-bottom:5px;">${dateStr}</div>${rows}`;
+      const wasVisible = el.style.display === 'block';
+      if (!wasVisible) { el.style.visibility = 'hidden'; el.style.display = 'block'; }
+      const ttH = el.offsetHeight, ttW = el.offsetWidth;
+      const rect = anchor.getBoundingClientRect();
+      let left = rect.left + rect.width / 2 - ttW / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - ttW - 8));
+      el.style.left = left + 'px';
+      el.style.top = (rect.top - ttH - 8) + 'px';
+      if (!wasVisible) el.style.visibility = '';
+    }
+
+    _snapDates.forEach(iso => {
+      const ts = new Date(iso).getTime();
+      const frac = tsToFrac(ts);
+      const matchesOnDate = ['singles', 'doubles', 'padel'].flatMap(cat =>
+        allSeasonMatches[cat].filter(m => m.date === iso).map(m => ({ ...m, cat }))
+      );
+      let color = '#bbb';
+      if (matchesOnDate.some(m => m.meta.result === 'L')) color = '#d93025';
+      else if (matchesOnDate.some(m => m.meta.result === 'W')) color = '#22a84a';
+      const dot = document.createElement('div');
+      dot.style.cssText = `position:absolute;left:${frac * 100}%;top:50%;width:10px;height:10px;margin-top:-5px;background:${color};border:2px solid rgba(255,255,255,0.9);border-radius:50%;transform:translateX(-50%);z-index:1;cursor:default;box-shadow:0 1px 3px rgba(0,0,0,.2);`;
+      dot.addEventListener('mouseenter', () => showSliderTooltip(dot, matchesOnDate, iso));
+      dot.addEventListener('mouseleave', () => {
+        const tt = document.getElementById('knltbSliderTooltip');
+        if (tt) tt.style.display = 'none';
+      });
+      sliderWrap.appendChild(dot);
+    });
+
+    sliderWrap.appendChild(startThumb);
+    sliderWrap.appendChild(endThumb);
+    _dateFilterRow.appendChild(sliderWrap);
+
+    // Date labels below slider
+    const dlRow = document.createElement('div');
+    dlRow.style.cssText = 'display:flex; justify-content:space-between; font-size:10px; color:#888; margin:3px 7px 0;';
+    const dlStart = document.createElement('span');
+    const dlEnd = document.createElement('span');
+    dlRow.appendChild(dlStart);
+    dlRow.appendChild(dlEnd);
+    _dateFilterRow.appendChild(dlRow);
+
+    function updateUI() {
+      const sf = tsToFrac(_sliderStartTs);
+      const ef = tsToFrac(_sliderEndTs);
+      startThumb.style.left = (sf * 100) + '%';
+      endThumb.style.left = (ef * 100) + '%';
+      fill.style.left = (sf * 100) + '%';
+      fill.style.right = ((1 - ef) * 100) + '%';
+      dlStart.textContent = tsToLabel(_sliderStartTs);
+      dlEnd.textContent = tsToLabel(_sliderEndTs);
+    }
+
+    function applyFilter() {
+      dateFilter.start = _sliderStartTs <= _sliderMinTs ? null : tsToIso(_sliderStartTs);
+      dateFilter.end = _sliderEndTs >= _sliderMaxTs ? null : tsToIso(_sliderEndTs);
+      updateFilterCount();
+    }
+
+    function makeDraggable(thumb, isStart) {
+      thumb.addEventListener('mousedown', e => {
+        e.preventDefault();
+        thumb.style.cursor = 'grabbing';
+        function onMove(e) {
+          const rect = sliderWrap.getBoundingClientRect();
+          const snapped = snapToNearest(fracToTs((e.clientX - rect.left) / rect.width));
+          if (isStart) {
+            _sliderStartTs = Math.min(snapped, _sliderEndTs);
+          } else {
+            _sliderEndTs = Math.max(snapped, _sliderStartTs);
+          }
+          updateUI();
+          applyFilter();
+          const iso = tsToIso(snapped);
+          const matchesOnDate = ['singles', 'doubles', 'padel'].flatMap(cat =>
+            allSeasonMatches[cat].filter(m => m.date === iso).map(m => ({ ...m, cat }))
+          );
+          if (matchesOnDate.length > 0) {
+            showSliderTooltip(thumb, matchesOnDate, iso);
+          } else {
+            const tt = document.getElementById('knltbSliderTooltip');
+            if (tt) tt.style.display = 'none';
+          }
+        }
+        function onUp() {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          thumb.style.cursor = 'grab';
+          const tt = document.getElementById('knltbSliderTooltip');
+          if (tt) tt.style.display = 'none';
+          refreshViews();
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    }
+    makeDraggable(startThumb, true);
+    makeDraggable(endThumb, false);
+
+    clearBtn.onclick = () => {
+      _sliderStartTs = _sliderMinTs;
+      _sliderEndTs = _sliderMaxTs;
+      dateFilter.start = null;
+      dateFilter.end = null;
+      updateUI();
+      updateFilterCount();
+      refreshViews();
+    };
+
+    updateUI();
+  }
+
+  function updateDateFilterBounds() {
+    const allDates = ["singles", "doubles", "padel"]
+      .flatMap(cat => allSeasonMatches[cat].map(m => m.date))
+      .filter(Boolean);
+    _snapDates = [...new Set(allDates)].sort();
+    if (_snapDates.length === 0 || !_dateFilterRow) return;
+    _sliderMinTs = new Date(_snapDates[0]).getTime();
+    _sliderMaxTs = new Date(_snapDates[_snapDates.length - 1]).getTime();
+    _sliderStartTs = _sliderMinTs;
+    _sliderEndTs = _sliderMaxTs;
+    dateFilter.start = null;
+    dateFilter.end = null;
+    buildSliderUI();
+    _dateFilterRow.style.display = 'block';
+    updateFilterCount();
+  }
+
+  function refreshViews() {
+    if (chartVisible) {
+      processMatches({ inPlace: true });
+    }
+    if (tableVisible) {
+      const existing = document.getElementById("knltbMatchTable");
+      if (existing) existing.remove();
+      tableVisible = false;
+      showMatchesTable();
+    }
+    if (statsVisible) {
+      const existing = document.getElementById("knltbStatsPanel");
+      if (existing) existing.remove();
+      statsVisible = false;
+      showSeasonStats();
+    }
   }
 
   function getProfilePlayerName() {
@@ -82,14 +360,133 @@
     return null;
   }
 
+  // Wait until the DOM has been quiet for `quietMs` with a hard `maxMs` cap.
+  function waitForDomStable(container, quietMs, maxMs, callback) {
+    let done = false;
+    let quietTimer = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(hardTimer);
+      obs.disconnect();
+      callback();
+    };
+    const obs = new MutationObserver(() => {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, quietMs);
+    });
+    obs.observe(container, { childList: true, subtree: true });
+    quietTimer = setTimeout(finish, quietMs); // fires immediately if already stable
+    const hardTimer = setTimeout(finish, maxMs);
+  }
+
+  // Deduplicate allSeasonMatches in-place using date+teams+score as the key.
+  // Guards against accumulating duplicate matches when a season's content is
+  // re-parsed because the DOM accumulated nodes from a previous season.
+  function deduplicateAllMatches() {
+    ['singles', 'doubles', 'padel'].forEach(cat => {
+      const seen = new Set();
+      allSeasonMatches[cat] = allSeasonMatches[cat].filter(m => {
+        const key = [
+          m.date,
+          (m.meta.myTeam  || []).join('|'),
+          (m.meta.oppTeam || []).join('|'),
+          (m.meta.sets    || []).map(([a, b]) => `${a}-${b}`).join(',')
+        ].join('::');
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    });
+  }
+
+  function importAllSeasons() {
+    // Group season tabs by tabstrip so we can click the same season index
+    // in BOTH sections (KNLTB DSS = tennis, KNLTB Padel DSS = padel) at the
+    // same time.  Their content divs are independent, so parallel loading
+    // works fine.
+    const tabstrips = [...document.querySelectorAll('ul.js-tabstrip[data-tabcontentid]')];
+    const groups = tabstrips
+      .map(ts => [...ts.querySelectorAll('a.js-tab.page-nav__link')])
+      .filter(tabs => tabs.length > 0);
+
+    if (groups.length === 0) {
+      setStatus("❌ Could not find season tabs. Are you on a player profile page?", "error");
+      return;
+    }
+
+    const totalTabs = groups.reduce((s, g) => s + g.length, 0);
+    console.log(`🗓️ Found ${groups.length} sport sections, ${totalTabs} season tabs total`);
+    groups.forEach((g, i) => console.log(`  Section ${i + 1}:`, g.map(t => t.textContent.trim())));
+
+    allSeasonMatches = { singles: [], doubles: [], padel: [] };
+    dateFilter = { start: null, end: null };
+    if (_dateFilterRow) _dateFilterRow.style.display = 'none';
+
+    if (_importBtn) _importBtn.disabled = true;
+    if (_importAllBtn) _importAllBtn.disabled = true;
+
+    const maxRounds = Math.max(...groups.map(g => g.length));
+    let round = 0;
+
+    function processNextRound() {
+      if (round >= maxRounds) {
+        deduplicateAllMatches();
+        const counts = Object.entries(allSeasonMatches)
+          .map(([cat, arr]) => `${cat}: <strong>${arr.length}</strong>`)
+          .join(", ");
+        setStatus(`✅ Imported all seasons — ${counts}`);
+        if (_importBtn) _importBtn.disabled = false;
+        if (_importAllBtn) _importAllBtn.disabled = false;
+        updateDateFilterBounds();
+        refreshViews();
+        return;
+      }
+
+      // Click tab[round] from every section that still has a tab at this index.
+      const tabsThisRound = groups
+        .filter(g => round < g.length)
+        .map(g => g[round]);
+
+      const label = tabsThisRound.map(t => t.textContent.trim()).join(' + ');
+      setStatus(`⏳ Round ${round + 1}/${maxRounds}: ${label}…`);
+      tabsThisRound.forEach(t => t.click());
+      round++;
+
+      // Both sections load independently — one stability window covers both.
+      waitForDomStable(document.body, 700, 8000, () => {
+        expandAllDetails(() => {
+          parseSeasonMatches();
+          processNextRound();
+        });
+      });
+    }
+
+    processNextRound();
+  }
+
   function expandAllDetails(callback) {
-    const buttons = [...document.querySelectorAll(".btn--more-details")];
+    const buttons = [...document.querySelectorAll(".btn--more-details")].filter(btn => {
+      const panel = btn.closest('.accordion');
+      if (!panel) return true;
+      for (const titleEl of panel.querySelectorAll('.accordion__header .stats__title')) {
+        if (titleEl.textContent.trim() === 'Wedstrijden') {
+          const valueEl = titleEl.nextElementSibling;
+          if (valueEl && valueEl.textContent.trim() === '0') return false;
+        }
+      }
+      return true;
+    });
     if (buttons.length === 0) return callback();
 
     let index = 0;
     function clickNext() {
       if (index >= buttons.length) {
-        setTimeout(callback, 500);
+        // All accordion buttons clicked.  The per-match AJAX calls replace the
+        // form contents (not the element itself), so we can't watch for element
+        // removal.  Instead use DOM stability: when the DOM has been quiet for
+        // 1 s all responses have arrived.
+        waitForDomStable(document.body, 1000, 20000, callback);
         return;
       }
       buttons[index++].click();
@@ -294,24 +691,28 @@
       }
 
       if (foundPlayer && rating !== null && date) {
-        const category = detectSportCategory(matchItem);
-        allSeasonMatches[category].push({
-          date,
-          rating,
-          detectIndex: i,
-          meta: {
-            myTeam,
-            oppTeam,
-            myTeamRatings,
-            oppTeamRatings,
-            profilePlayerIdx: userPlayerIdx,
-            sets,
-            impact,
-            result: resultWL,
-            tournament,
-            round
-          }
-        });
+        if (date < '2021-11-01') {
+          console.log(`Match ${i + 1}: Skipping — pre-2021/22 season (${date})`);
+        } else {
+          const category = detectSportCategory(matchItem);
+          allSeasonMatches[category].push({
+            date,
+            rating,
+            detectIndex: i,
+            meta: {
+              myTeam,
+              oppTeam,
+              myTeamRatings,
+              oppTeamRatings,
+              profilePlayerIdx: userPlayerIdx,
+              sets,
+              impact,
+              result: resultWL,
+              tournament,
+              round
+            }
+          });
+        }
       } else {
         console.log(`Match ${i + 1}: Skipping because player not found, or rating or date is missing`);
       }
@@ -345,7 +746,7 @@
     return changes;
   }
 
-  function processMatches() {
+  function processMatches({ inPlace = false } = {}) {
     const categories = ["singles", "doubles", "padel"];
 
     if (categories.every(cat => allSeasonMatches[cat].length === 0)) {
@@ -355,7 +756,7 @@
 
     const colors = ["blue", "green", "orange"];
     const sortedArrays = categories.map(cat =>
-      allSeasonMatches[cat].slice().sort((a, b) => {
+      getFilteredMatches(cat).slice().sort((a, b) => {
         const da = new Date(a.date);
         const db = new Date(b.date);
         if (da < db) return -1;
@@ -516,6 +917,18 @@
         yMin: Math.floor((Math.min(...ys) - margin) * 10) / 10,
         yMax: Math.ceil((Math.max(...ys) + margin) * 10) / 10
       };
+    }
+
+    // When refreshing from the filter slider, update the existing chart in-place
+    // so the panel layout stays intact (no maximized-mode disruption) and Chart.js
+    // doesn't replay its entry animation.
+    if (inPlace && window._ratingChart) {
+      window._ratingChart.data.datasets = datasets;
+      const range = computeYRangeFromVisible(window._ratingChart);
+      window._ratingChart.options.scales.y.min = range.yMin;
+      window._ratingChart.options.scales.y.max = range.yMax;
+      window._ratingChart.update('none');
+      return;
     }
 
     if (window._ratingChart && typeof window._ratingChart.destroy === "function") {
@@ -855,7 +1268,9 @@
     container.style.borderTop = "1px solid #eee";
     container.style.width = "100%";
 
-    let currentCat = categories.find(cat => allSeasonMatches[cat].length > 0) || "singles";
+    let currentCat = (_activeTableCat && allSeasonMatches[_activeTableCat].length > 0)
+      ? _activeTableCat
+      : (categories.find(cat => allSeasonMatches[cat].length > 0) || "singles");
     let sortKey = "detectIndex";
     let sortAsc = true;
 
@@ -880,7 +1295,7 @@
       const tabRow = document.createElement("div");
       tabRow.style.cssText = "display:flex; gap:4px; margin-bottom:8px; flex-wrap:wrap;";
       categories.forEach(cat => {
-        const count = allSeasonMatches[cat].length;
+        const count = getFilteredMatches(cat).length;
         const active = cat === currentCat;
         const tab = document.createElement("button");
         tab.textContent = `${cat.charAt(0).toUpperCase() + cat.slice(1)} (${count})`;
@@ -891,12 +1306,12 @@
           color:${active ? "#fff" : "#333"};
           font-weight:${active ? "600" : "400"};
         `;
-        tab.onclick = () => { currentCat = cat; sortKey = "detectIndex"; sortAsc = true; renderTable(); };
+        tab.onclick = () => { currentCat = cat; _activeTableCat = cat; sortKey = "detectIndex"; sortAsc = true; renderTable(); };
         tabRow.appendChild(tab);
       });
       container.appendChild(tabRow);
 
-      const matches = allSeasonMatches[currentCat].slice().sort((a, b) => {
+      const matches = getFilteredMatches(currentCat).slice().sort((a, b) => {
         let va, vb;
         if (sortKey === "detectIndex") { va = a.detectIndex ?? 0; vb = b.detectIndex ?? 0; }
         else if (sortKey === "impact")  { va = a.meta.impact ?? 0; vb = b.meta.impact ?? 0; }
@@ -1093,7 +1508,9 @@
     container.id = "knltbStatsPanel";
     container.style.cssText = "margin-top:10px; padding-top:6px; border-top:1px solid #eee; width:100%; display:flex; flex-direction:column; flex:1; min-height:0;";
 
-    let currentCat = categories.find(cat => allSeasonMatches[cat].length > 0) || "singles";
+    let currentCat = (_activeStatsCat && allSeasonMatches[_activeStatsCat].length > 0)
+      ? _activeStatsCat
+      : (categories.find(cat => allSeasonMatches[cat].length > 0) || "singles");
     let selectedPartner = '';
 
     function pct(num, denom) {
@@ -1208,7 +1625,7 @@
       const tabRow = document.createElement("div");
       tabRow.style.cssText = "flex-shrink:0; display:flex; gap:4px; margin-bottom:10px; flex-wrap:wrap;";
       categories.forEach(cat => {
-        const count = allSeasonMatches[cat].length;
+        const count = getFilteredMatches(cat).length;
         const active = cat === currentCat;
         const tab = document.createElement("button");
         tab.textContent = `${cat.charAt(0).toUpperCase() + cat.slice(1)} (${count})`;
@@ -1217,14 +1634,14 @@
           background:${active ? "#193291" : "#fff"};
           color:${active ? "#fff" : "#333"};
           font-weight:${active ? "600" : "400"};`;
-        tab.onclick = () => { currentCat = cat; renderStats(); };
+        tab.onclick = () => { currentCat = cat; _activeStatsCat = cat; renderStats(); };
         tabRow.appendChild(tab);
       });
       container.appendChild(tabRow);
 
       // Partner filter — doubles only
       if (currentCat === 'doubles') {
-        const doublesMatches = allSeasonMatches['doubles'];
+        const doublesMatches = getFilteredMatches('doubles');
         const partnerSet = new Set();
         doublesMatches.forEach(m => {
           const profIdx = m.meta.profilePlayerIdx ?? 0;
@@ -1266,7 +1683,7 @@
       }
 
       // Filter matches by partner when applicable
-      let matchesToUse = allSeasonMatches[currentCat];
+      let matchesToUse = getFilteredMatches(currentCat);
       if (currentCat === 'doubles' && selectedPartner) {
         matchesToUse = matchesToUse.filter(m => {
           const profIdx = m.meta.profilePlayerIdx ?? 0;
@@ -1342,13 +1759,25 @@
     btnRow.style.gap = '8px';
     btnRow.style.flexWrap = 'wrap';
 
-    const importBtn = window.KNLTBPanel.createButton('📥 Import', 'Import matches from this season', {
+    _importBtn = window.KNLTBPanel.createButton('📥 Import', 'Import matches from this season', {
       background: '#193291', color: '#fff'
     });
-    importBtn.onclick = () => {
+    _importBtn.onclick = () => {
+      allSeasonMatches = { singles: [], doubles: [], padel: [] };
       setStatus("⏳ Importing season… this may take a few seconds.");
-      expandAllDetails(parseSeasonMatches);
+      _importBtn.disabled = true;
+      expandAllDetails(() => {
+        parseSeasonMatches();
+        updateDateFilterBounds();
+        refreshViews();
+        _importBtn.disabled = false;
+      });
     };
+
+    _importAllBtn = window.KNLTBPanel.createButton('📥 All Seasons', 'Import matches from all seasons', {
+      background: '#193291', color: '#fff'
+    });
+    _importAllBtn.onclick = importAllSeasons;
 
     const processBtn = window.KNLTBPanel.createButton('📊 Chart', 'Toggle rating chart');
     _chartBtn = processBtn;
@@ -1362,7 +1791,8 @@
     _statsBtn = statsBtn;
     statsBtn.onclick = showSeasonStats;
 
-    btnRow.appendChild(importBtn);
+    btnRow.appendChild(_importBtn);
+    btnRow.appendChild(_importAllBtn);
     btnRow.appendChild(processBtn);
     btnRow.appendChild(tableBtn);
     btnRow.appendChild(statsBtn);
@@ -1374,6 +1804,10 @@
     status.style.fontSize = "12px";
     status.style.opacity = "0.9";
     contentWrap.appendChild(status);
+
+    _dateFilterRow = document.createElement('div');
+    _dateFilterRow.style.cssText = 'display:none; margin-top:6px;';
+    contentWrap.appendChild(_dateFilterRow);
 
     const ratingPanel = document.createElement("div");
     ratingPanel.id = "ratingPanel";
