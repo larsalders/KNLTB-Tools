@@ -19,6 +19,9 @@
   let _dateFilterRow = null;
   let _importBtn = null;
   let _importAllBtn = null;
+  let _progressBar = null;
+  let _progressFill = null;
+  let _progressLabel = null;
   let _sliderMinTs = 0;
   let _sliderMaxTs = 0;
   let _sliderStartTs = 0;
@@ -32,6 +35,17 @@
     if (!el) return;
     el.innerHTML = message;
     el.style.color = kind === "error" ? "#b00020" : "#222";
+  }
+
+  function updateProgress(pct, label) {
+    if (!_progressBar) return;
+    if (pct === null) {
+      _progressBar.style.display = 'none';
+      return;
+    }
+    _progressBar.style.display = '';
+    if (_progressFill) _progressFill.style.width = pct + '%';
+    if (_progressLabel) _progressLabel.textContent = label || '';
   }
 
   function getFilteredMatches(cat) {
@@ -101,7 +115,7 @@
 
     // Slider track area
     const sliderWrap = document.createElement('div');
-    sliderWrap.style.cssText = 'position:relative; height:18px; margin:0 7px; user-select:none;';
+    sliderWrap.style.cssText = 'position:relative; height:32px; margin:0 7px; user-select:none; touch-action:none;';
 
     const track = document.createElement('div');
     track.style.cssText = 'position:absolute; left:0; right:0; top:50%; height:4px; margin-top:-2px; background:#e0e0e0; border-radius:2px;';
@@ -111,7 +125,7 @@
 
     function mkThumb() {
       const t = document.createElement('div');
-      t.style.cssText = 'position:absolute; top:50%; width:14px; height:14px; margin-top:-7px; background:#193291; border:2px solid #fff; border-radius:50%; cursor:grab; transform:translateX(-50%); box-shadow:0 1px 4px rgba(0,0,0,.3); z-index:2;';
+      t.style.cssText = 'position:absolute; top:50%; width:26px; height:26px; margin-top:-13px; background:#193291; border:2px solid #fff; border-radius:50%; cursor:grab; transform:translateX(-50%); box-shadow:0 1px 4px rgba(0,0,0,.3); z-index:2;';
       return t;
     }
     const startThumb = mkThumb();
@@ -214,12 +228,11 @@
     }
 
     function makeDraggable(thumb, isStart) {
-      thumb.addEventListener('mousedown', e => {
-        e.preventDefault();
+      function startDrag(startClientX) {
         thumb.style.cursor = 'grabbing';
-        function onMove(e) {
+        function onMove(clientX) {
           const rect = sliderWrap.getBoundingClientRect();
-          const snapped = snapToNearest(fracToTs((e.clientX - rect.left) / rect.width));
+          const snapped = snapToNearest(fracToTs((clientX - rect.left) / rect.width));
           if (isStart) {
             _sliderStartTs = Math.min(snapped, _sliderEndTs);
           } else {
@@ -238,17 +251,33 @@
             if (tt) tt.style.display = 'none';
           }
         }
+        function onMouseMove(e) { onMove(e.clientX); }
+        function onTouchMove(e) { e.preventDefault(); onMove(e.touches[0].clientX); }
         function onUp() {
-          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mousemove', onMouseMove);
           document.removeEventListener('mouseup', onUp);
+          document.removeEventListener('touchmove', onTouchMove);
+          document.removeEventListener('touchend', onTouchEnd);
           thumb.style.cursor = 'grab';
           const tt = document.getElementById('knltbSliderTooltip');
           if (tt) tt.style.display = 'none';
           refreshViews();
         }
-        document.addEventListener('mousemove', onMove);
+        function onTouchEnd() { onUp(); }
+        document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onUp);
+        document.addEventListener('touchmove', onTouchMove, { passive: false });
+        document.addEventListener('touchend', onTouchEnd);
+        onMove(startClientX);
+      }
+      thumb.addEventListener('mousedown', e => {
+        e.preventDefault();
+        startDrag(e.clientX);
       });
+      thumb.addEventListener('touchstart', e => {
+        e.preventDefault();
+        startDrag(e.touches[0].clientX);
+      }, { passive: false });
     }
     makeDraggable(startThumb, true);
     makeDraggable(endThumb, false);
@@ -400,11 +429,10 @@
     });
   }
 
-  function importAllSeasons() {
-    // Group season tabs by tabstrip so we can click the same season index
-    // in BOTH sections (KNLTB DSS = tennis, KNLTB Padel DSS = padel) at the
-    // same time.  Their content divs are independent, so parallel loading
-    // works fine.
+  function showSeasonSlider() {
+    const existing = document.getElementById('knltbSeasonSlider');
+    if (existing) { existing.remove(); return; }
+
     const tabstrips = [...document.querySelectorAll('ul.js-tabstrip[data-tabcontentid]')];
     const groups = tabstrips
       .map(ts => [...ts.querySelectorAll('a.js-tab.page-nav__link')])
@@ -415,8 +443,160 @@
       return;
     }
 
-    const totalTabs = groups.reduce((s, g) => s + g.length, 0);
-    console.log(`🗓️ Found ${groups.length} sport sections, ${totalTabs} season tabs total`);
+    const maxRounds = Math.max(...groups.map(g => g.length));
+    // seasons[0] = oldest (page index maxRounds-1), seasons[n-1] = newest (page index 0)
+    const seasons = Array.from({ length: maxRounds }, (_, i) => {
+      const pageIdx = maxRounds - 1 - i;
+      const full = groups.filter(g => pageIdx < g.length).map(g => g[pageIdx].textContent.trim()).join(' / ');
+      const m = full.match(/\b(\d{4})[\/\-](\d{4})\b/);
+      const short = m ? m[1].slice(2) + '/' + m[2].slice(2) : full.replace(/seizoen\s*/i, '').trim().slice(0, 8);
+      return { pageIdx, full, short };
+    });
+
+    let selStart = 0;
+    let selEnd = seasons.length - 1;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'knltbSeasonSlider';
+    wrap.style.cssText = 'margin-top:6px;';
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'font-size:11px; font-weight:600; color:#555; margin-bottom:4px;';
+    hdr.textContent = 'Season range:';
+    wrap.appendChild(hdr);
+
+    const sliderWrap = document.createElement('div');
+    sliderWrap.style.cssText = 'position:relative; height:32px; margin:0 7px; user-select:none; touch-action:none;';
+
+    const track = document.createElement('div');
+    track.style.cssText = 'position:absolute; left:0; right:0; top:50%; height:4px; margin-top:-2px; background:#e0e0e0; border-radius:2px;';
+    const fill = document.createElement('div');
+    fill.style.cssText = 'position:absolute; top:50%; height:4px; margin-top:-2px; background:#193291; border-radius:2px;';
+    sliderWrap.appendChild(track);
+    sliderWrap.appendChild(fill);
+
+    seasons.forEach((_, i) => {
+      const frac = seasons.length === 1 ? 0.5 : i / (seasons.length - 1);
+      const dot = document.createElement('div');
+      dot.style.cssText = `position:absolute; left:${frac*100}%; top:50%; width:8px; height:8px; margin-top:-4px; background:#bbb; border:2px solid rgba(255,255,255,0.9); border-radius:50%; transform:translateX(-50%); z-index:1;`;
+      sliderWrap.appendChild(dot);
+    });
+
+    function mkThumb() {
+      const t = document.createElement('div');
+      t.style.cssText = 'position:absolute; top:50%; width:26px; height:26px; margin-top:-13px; background:#193291; border:2px solid #fff; border-radius:50%; cursor:grab; transform:translateX(-50%); box-shadow:0 1px 4px rgba(0,0,0,.3); z-index:2;';
+      return t;
+    }
+    const startThumb = mkThumb();
+    const endThumb = mkThumb();
+    sliderWrap.appendChild(startThumb);
+    sliderWrap.appendChild(endThumb);
+    wrap.appendChild(sliderWrap);
+
+    // Season labels positioned under each dot
+    const labelRow = document.createElement('div');
+    labelRow.style.cssText = 'position:relative; height:14px; margin:3px 7px 0;';
+    seasons.forEach(({ short }, i) => {
+      const frac = seasons.length === 1 ? 0.5 : i / (seasons.length - 1);
+      const lbl = document.createElement('div');
+      lbl.style.cssText = `position:absolute; left:${frac*100}%; transform:translateX(-50%); font-size:9px; color:#aaa; white-space:nowrap;`;
+      lbl.textContent = short;
+      labelRow.appendChild(lbl);
+    });
+    wrap.appendChild(labelRow);
+
+    const summary = document.createElement('div');
+    summary.style.cssText = 'font-size:11px; color:#193291; font-weight:600; text-align:center; margin-top:6px;';
+    wrap.appendChild(summary);
+
+    const importRangeBtn = window.KNLTBPanel.createButton('📥 Import', 'Import selected season range', {
+      background: '#193291', color: '#fff'
+    });
+    importRangeBtn.style.width = '100%';
+    importRangeBtn.style.marginTop = '8px';
+    importRangeBtn.style.padding = '7px 4px';
+    importRangeBtn.addEventListener('click', () => {
+      const selected = seasons.slice(selStart, selEnd + 1).map(s => s.pageIdx);
+      wrap.remove();
+      importAllSeasons(selected);
+    });
+    wrap.appendChild(importRangeBtn);
+
+    function fracToIdx(f) {
+      return Math.round(Math.max(0, Math.min(1, f)) * (seasons.length - 1));
+    }
+
+    function updateUI() {
+      const n = seasons.length;
+      const sf = n === 1 ? 0.5 : selStart / (n - 1);
+      const ef = n === 1 ? 0.5 : selEnd / (n - 1);
+      startThumb.style.left = (sf * 100) + '%';
+      endThumb.style.left = (ef * 100) + '%';
+      fill.style.left = (sf * 100) + '%';
+      fill.style.right = ((1 - ef) * 100) + '%';
+      const count = selEnd - selStart + 1;
+      summary.textContent = `${seasons[selStart].short} – ${seasons[selEnd].short}  (${count} season${count !== 1 ? 's' : ''})`;
+    }
+
+    function makeDraggable(thumb, isStart) {
+      function startDrag(clientX) {
+        thumb.style.cursor = 'grabbing';
+        function onMove(clientX) {
+          const rect = sliderWrap.getBoundingClientRect();
+          const idx = fracToIdx((clientX - rect.left) / rect.width);
+          if (isStart) { selStart = Math.min(idx, selEnd); }
+          else { selEnd = Math.max(idx, selStart); }
+          updateUI();
+        }
+        function onMouseMove(e) { onMove(e.clientX); }
+        function onTouchMove(e) { e.preventDefault(); onMove(e.touches[0].clientX); }
+        function onUp() {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onUp);
+          document.removeEventListener('touchmove', onTouchMove);
+          document.removeEventListener('touchend', onTouchEnd);
+          thumb.style.cursor = 'grab';
+        }
+        function onTouchEnd() { onUp(); }
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onUp);
+        document.addEventListener('touchmove', onTouchMove, { passive: false });
+        document.addEventListener('touchend', onTouchEnd);
+        onMove(clientX);
+      }
+      thumb.addEventListener('mousedown', e => { e.preventDefault(); startDrag(e.clientX); });
+      thumb.addEventListener('touchstart', e => { e.preventDefault(); startDrag(e.touches[0].clientX); }, { passive: false });
+    }
+
+    makeDraggable(startThumb, true);
+    makeDraggable(endThumb, false);
+    updateUI();
+
+    const statusEl = document.getElementById('knltbStatus');
+    if (statusEl && statusEl.parentElement) {
+      statusEl.parentElement.insertBefore(wrap, statusEl);
+    } else {
+      _contentWrap.appendChild(wrap);
+    }
+
+    requestAnimationFrame(fitPanelToContent);
+  }
+
+  function importAllSeasons(selectedRounds) {
+    const tabstrips = [...document.querySelectorAll('ul.js-tabstrip[data-tabcontentid]')];
+    const groups = tabstrips
+      .map(ts => [...ts.querySelectorAll('a.js-tab.page-nav__link')])
+      .filter(tabs => tabs.length > 0);
+
+    if (groups.length === 0) {
+      setStatus("❌ Could not find season tabs. Are you on a player profile page?", "error");
+      return;
+    }
+
+    const maxRounds = Math.max(...groups.map(g => g.length));
+    const roundsToProcess = selectedRounds || Array.from({ length: maxRounds }, (_, i) => i);
+
+    console.log(`🗓️ Found ${groups.length} sport sections, processing ${roundsToProcess.length} season(s)`);
     groups.forEach((g, i) => console.log(`  Section ${i + 1}:`, g.map(t => t.textContent.trim())));
 
     allSeasonMatches = { singles: [], doubles: [], padel: [] };
@@ -426,38 +606,51 @@
     if (_importBtn) _importBtn.disabled = true;
     if (_importAllBtn) _importAllBtn.disabled = true;
 
-    const maxRounds = Math.max(...groups.map(g => g.length));
-    let round = 0;
+    let step = 0;
 
     function processNextRound() {
-      if (round >= maxRounds) {
+      if (step >= roundsToProcess.length) {
         deduplicateAllMatches();
         const counts = Object.entries(allSeasonMatches)
           .map(([cat, arr]) => `${cat}: <strong>${arr.length}</strong>`)
           .join(", ");
-        setStatus(`✅ Imported all seasons — ${counts}`);
+        setStatus(`✅ Imported ${roundsToProcess.length} season(s) — ${counts}`);
+        updateProgress(null);
         if (_importBtn) _importBtn.disabled = false;
         if (_importAllBtn) _importAllBtn.disabled = false;
         updateDateFilterBounds();
         refreshViews();
+        requestAnimationFrame(fitPanelToContent);
         return;
       }
 
-      // Click tab[round] from every section that still has a tab at this index.
+      const round = roundsToProcess[step];
       const tabsThisRound = groups
         .filter(g => round < g.length)
         .map(g => g[round]);
 
-      const label = tabsThisRound.map(t => t.textContent.trim()).join(' + ');
-      setStatus(`⏳ Round ${round + 1}/${maxRounds}: ${label}…`);
+      const seasonLabel = tabsThisRound.map(t => t.textContent.trim()).join(' / ');
+      const basePct = Math.round((step / roundsToProcess.length) * 100);
+      const nextPct = Math.round(((step + 1) / roundsToProcess.length) * 100);
+
+      setStatus(`⏳ ${step + 1}/${roundsToProcess.length}: ${seasonLabel}`);
+      updateProgress(basePct, `Loading ${seasonLabel}…`);
       tabsThisRound.forEach(t => t.click());
-      round++;
+      step++;
 
       // Both sections load independently — one stability window covers both.
       waitForDomStable(document.body, 700, 8000, () => {
+        updateProgress(basePct + Math.round((nextPct - basePct) * 0.35), `Expanding details for ${seasonLabel}…`);
         expandAllDetails(() => {
-          parseSeasonMatches();
-          processNextRound();
+          updateProgress(basePct + Math.round((nextPct - basePct) * 0.5), `Parsing ${seasonLabel}…`);
+          parseSeasonMatchesAsync(
+            (matchNum, total, info) => {
+              const pct = basePct + Math.round((nextPct - basePct) * (0.5 + 0.5 * matchNum / total));
+              const icon = info.result === 'W' ? '✅' : info.result === 'L' ? '❌' : info.skipped ? '·' : '—';
+              updateProgress(pct, `${matchNum}/${total} · ${info.date || '?'} · ${info.category || ''} ${icon}`);
+            },
+            processNextRound
+          );
         });
       });
     }
@@ -532,50 +725,53 @@
     return "padel";
   }
 
-  function parseSeasonMatches() {
+  function parseSeasonMatchesAsync(onProgress, onDone) {
     const profileName = getProfilePlayerName();
     if (!profileName) {
       setStatus("❌ Could not determine player name.", "error");
+      onDone && onDone();
       return;
     }
     const normalizedProfileName = normalizeName(profileName);
     const profileMemberId = getProfileMemberId();
     console.log("👤 Detected player (from header when available):", { name: profileName, id: profileMemberId });
 
-    const matches = document.querySelectorAll("li.match-group__item");
-    console.log(`🔍 Found ${matches.length} match items`);
+    const matchItems = [...document.querySelectorAll("li.match-group__item")];
+    const total = matchItems.length;
+    console.log(`🔍 Found ${total} match items`);
 
-    matches.forEach((matchItem, i) => {
-      const body = matchItem.querySelector(".match__body");
-      if (!body) {
-        console.log(`Match ${i + 1}: No .match__body element found`);
+    let i = 0;
+    function processNext() {
+      if (i >= total) {
+        onDone && onDone();
         return;
       }
+      const matchItem = matchItems[i];
+      const matchNum = i + 1;
+      i++;
+
+      let tickerInfo = { date: null, category: null, result: null, tournament: null, skipped: true };
+
+      const body = matchItem.querySelector(".match__body");
+      if (!body) { console.log(`Match ${matchNum}: No .match__body element found`); setTimeout(processNext, 0); return; }
 
       const playerRows = body.querySelectorAll(".match__row");
-      if (playerRows.length !== 2) {
-        console.log(`Match ${i + 1}: Expected 2 player rows, found ${playerRows.length}`);
-        return;
-      }
+      if (playerRows.length !== 2) { console.log(`Match ${matchNum}: Expected 2 player rows, found ${playerRows.length}`); setTimeout(processNext, 0); return; }
 
-      // Collect all player data (name, rating, memberId) per row
       const rowPlayerData = [0, 1].map(rowIdx => {
         const row = playerRows[rowIdx];
         return Array.from(row.querySelectorAll(".match__row-title-value")).map(playerDiv => {
           const nameSpan = playerDiv.querySelector(".nav-link__value");
           const ratingSpan = playerDiv.querySelector(".match__row-title-aside");
           if (!nameSpan) return null;
-
           const rawName = nameSpan.textContent.trim();
           const name = rawName.replace(/\s*\(.*\)$/, "").trim();
           const normalizedName = normalizeName(name);
-
           const ratingSpanText = ratingSpan ? ratingSpan.textContent.trim() : "";
           const ratingMatch = ratingSpanText.match(/(\d+(?:[.,]\d+)?)/);
           const ratingStr = ratingMatch ? ratingMatch[1] : null;
           const parsedRating = ratingStr ? parseFloat(ratingStr.replace(",", ".")) : null;
           const playerRating = (parsedRating !== null && !isNaN(parsedRating)) ? parsedRating : null;
-
           let playerMemberId = null;
           const anchor = playerDiv.querySelector("a.nav-link[href]");
           if (anchor && anchor.getAttribute("href")) {
@@ -583,36 +779,23 @@
             const idMatch = href.match(/player=([0-9]+)/i) || href.match(/member(?:id)?=([0-9]+)/i) || href.match(/\/player\/([0-9]+)/i);
             if (idMatch) playerMemberId = idMatch[1];
           }
-
           return { name, normalizedName, playerMemberId, rating: playerRating };
         }).filter(Boolean);
       });
 
-      // Identify the profile player's row and position within it
-      let rating = null;
-      let foundPlayer = false;
-      let userRowIdx = null;
-      let userPlayerIdx = 0;
-
+      let rating = null, foundPlayer = false, userRowIdx = null, userPlayerIdx = 0;
       rowPlayerData.forEach((players, rowIdx) => {
         players.forEach((p, pIdx) => {
           const isNameMatch = p.normalizedName === normalizedProfileName;
           const isIdMatch = !!(profileMemberId && p.playerMemberId && p.playerMemberId === profileMemberId);
-          console.log(
-            `Match ${i + 1}: Checking player '${p.name}' (norm: '${p.normalizedName}', id: '${p.playerMemberId || "?"}')` +
-            ` vs profile {name: '${profileName}', norm: '${normalizedProfileName}', id: '${profileMemberId || "?"}'} , rating: '${p.rating}'`
-          );
+          console.log(`Match ${matchNum}: Checking player '${p.name}' (norm: '${p.normalizedName}', id: '${p.playerMemberId || "?"}') vs profile {name: '${profileName}', norm: '${normalizedProfileName}', id: '${profileMemberId || "?"}'} , rating: '${p.rating}'`);
           if (isNameMatch || isIdMatch) {
-            foundPlayer = true;
-            userRowIdx = rowIdx;
-            userPlayerIdx = pIdx;
-            rating = p.rating;
-            console.log(`✅ Match ${i + 1}: Found rating ${rating} for ${p.name}${isIdMatch ? " (matched by ID)" : " (matched by name)"}`);
+            foundPlayer = true; userRowIdx = rowIdx; userPlayerIdx = pIdx; rating = p.rating;
+            console.log(`✅ Match ${matchNum}: Found rating ${rating} for ${p.name}${isIdMatch ? " (matched by ID)" : " (matched by name)"}`);
           }
         });
       });
 
-      // Build oriented team data
       const myRowData = (userRowIdx !== null) ? rowPlayerData[userRowIdx] : [];
       const oppRowData = (userRowIdx !== null) ? rowPlayerData[1 - userRowIdx] : [];
       const myTeam = myRowData.map(p => p.name);
@@ -620,9 +803,7 @@
       const myTeamRatings = myRowData.map(p => p.rating);
       const oppTeamRatings = oppRowData.map(p => p.rating);
 
-      // Extract tournament and round from header
-      let tournament = null;
-      let round = null;
+      let tournament = null, round = null;
       const header = matchItem.querySelector(".match__header");
       if (header) {
         const navLinks = header.querySelectorAll(".match__header-title-item .nav-link__value");
@@ -632,7 +813,6 @@
         }
       }
 
-      // Parse set scores from the match result
       let sets = [];
       const setUls = matchItem.querySelectorAll(".match__result ul.points");
       setUls.forEach(ul => {
@@ -643,18 +823,12 @@
           if (!Number.isNaN(a) && !Number.isNaN(b)) sets.push([a, b]);
         }
       });
+      if (userRowIdx === 1) sets = sets.map(([a, b]) => [b, a]);
 
-      // Orient scores from the profile user's perspective
-      if (userRowIdx === 1) {
-        sets = sets.map(([a, b]) => [b, a]);
-      }
-
-      // Determine match W/L from oriented scores
       const wonSets = sets.filter(([a, b]) => a > b).length;
       const lostSets = sets.filter(([a, b]) => a < b).length;
       const resultWL = wonSets > lostSets ? "W" : (wonSets < lostSets ? "L" : "");
 
-      // Score impact from header aside
       let impact = null;
       const impactCandidates = matchItem.querySelectorAll(".match__header-aside .tag:not(.tag--placeholder) span");
       for (const sp of impactCandidates) {
@@ -682,46 +856,30 @@
             console.warn(`⚠️ Could not parse date string: "${dateSpan.textContent.trim()}", using raw value`);
             date = rawDate;
           }
-          console.log(`Match ${i + 1}: Date found - '${date}'`);
-        } else {
-          console.log(`Match ${i + 1}: No date span found in footer`);
-        }
-      } else {
-        console.log(`Match ${i + 1}: No .match__footer element found`);
-      }
+          console.log(`Match ${matchNum}: Date found - '${date}'`);
+        } else { console.log(`Match ${matchNum}: No date span found in footer`); }
+      } else { console.log(`Match ${matchNum}: No .match__footer element found`); }
 
       if (foundPlayer && rating !== null && date) {
         if (date < '2021-11-01') {
-          console.log(`Match ${i + 1}: Skipping — pre-2021/22 season (${date})`);
+          console.log(`Match ${matchNum}: Skipping — pre-2021/22 season (${date})`);
         } else {
           const category = detectSportCategory(matchItem);
           allSeasonMatches[category].push({
-            date,
-            rating,
-            detectIndex: i,
-            meta: {
-              myTeam,
-              oppTeam,
-              myTeamRatings,
-              oppTeamRatings,
-              profilePlayerIdx: userPlayerIdx,
-              sets,
-              impact,
-              result: resultWL,
-              tournament,
-              round
-            }
+            date, rating, detectIndex: matchNum - 1,
+            meta: { myTeam, oppTeam, myTeamRatings, oppTeamRatings, profilePlayerIdx: userPlayerIdx, sets, impact, result: resultWL, tournament, round }
           });
+          tickerInfo = { date, category, result: resultWL, tournament, skipped: false };
         }
       } else {
-        console.log(`Match ${i + 1}: Skipping because player not found, or rating or date is missing`);
+        console.log(`Match ${matchNum}: Skipping because player not found, or rating or date is missing`);
       }
-    });
 
-    const counts = Object.entries(allSeasonMatches)
-      .map(([cat, arr]) => `${cat}: <strong>${arr.length}</strong>`)
-      .join(", ");
-    setStatus(`✅ Imported matches from this season — ${counts}`);
+      onProgress && onProgress(matchNum, total, tickerInfo);
+      setTimeout(processNext, 0);
+    }
+
+    processNext();
   }
 
   function pointColor(result) {
@@ -1754,30 +1912,75 @@
     _panel = panel;
     _contentWrap = contentWrap;
 
-    const btnRow = document.createElement('div');
-    btnRow.style.display = 'flex';
-    btnRow.style.gap = '8px';
-    btnRow.style.flexWrap = 'wrap';
+    // Row 1: import buttons
+    const importRow = document.createElement('div');
+    importRow.style.cssText = 'display:flex; gap:4px;';
 
-    _importBtn = window.KNLTBPanel.createButton('📥 Import', 'Import matches from this season', {
+    _importBtn = window.KNLTBPanel.createButton('📥 Current', 'Import matches from this season', {
       background: '#193291', color: '#fff'
     });
     _importBtn.onclick = () => {
       allSeasonMatches = { singles: [], doubles: [], padel: [] };
-      setStatus("⏳ Importing season… this may take a few seconds.");
+      setStatus("⏳ Importing season…");
+      updateProgress(20, 'Expanding match details…');
       _importBtn.disabled = true;
       expandAllDetails(() => {
-        parseSeasonMatches();
-        updateDateFilterBounds();
-        refreshViews();
-        _importBtn.disabled = false;
+        updateProgress(40, 'Parsing matches…');
+        parseSeasonMatchesAsync(
+          (matchNum, total, info) => {
+            const pct = 40 + Math.round(58 * matchNum / total);
+            const icon = info.result === 'W' ? '✅' : info.result === 'L' ? '❌' : info.skipped ? '·' : '—';
+            updateProgress(pct, `${matchNum}/${total} · ${info.date || '?'} · ${info.category || ''} ${icon}`);
+          },
+          () => {
+            updateProgress(null);
+            const counts = Object.entries(allSeasonMatches)
+              .map(([cat, arr]) => `${cat}: <strong>${arr.length}</strong>`).join(', ');
+            setStatus(`✅ Imported — ${counts}`);
+            updateDateFilterBounds();
+            refreshViews();
+            _importBtn.disabled = false;
+            requestAnimationFrame(fitPanelToContent);
+          }
+        );
       });
     };
 
-    _importAllBtn = window.KNLTBPanel.createButton('📥 All Seasons', 'Import matches from all seasons', {
+    const importLast3Btn = window.KNLTBPanel.createButton('📥 Last 3', 'Import matches from the last 3 seasons', {
       background: '#193291', color: '#fff'
     });
-    _importAllBtn.onclick = importAllSeasons;
+    importLast3Btn.onclick = () => {
+      const tabstrips = [...document.querySelectorAll('ul.js-tabstrip[data-tabcontentid]')];
+      const groups = tabstrips
+        .map(ts => [...ts.querySelectorAll('a.js-tab.page-nav__link')])
+        .filter(tabs => tabs.length > 0);
+      if (groups.length === 0) {
+        setStatus("❌ Could not find season tabs. Are you on a player profile page?", "error");
+        return;
+      }
+      const n = Math.min(3, Math.max(...groups.map(g => g.length)));
+      importAllSeasons(Array.from({ length: n }, (_, i) => i));
+    };
+
+    _importAllBtn = window.KNLTBPanel.createButton('📥 All', 'Select season range and import', {
+      background: '#193291', color: '#fff'
+    });
+    _importAllBtn.onclick = showSeasonSlider;
+
+    [_importBtn, importLast3Btn, _importAllBtn].forEach(btn => {
+      btn.style.flex = '1';
+      btn.style.minWidth = '0';
+      btn.style.padding = '4px 4px';
+      btn.style.textAlign = 'center';
+    });
+    importRow.appendChild(_importBtn);
+    importRow.appendChild(importLast3Btn);
+    importRow.appendChild(_importAllBtn);
+    contentWrap.appendChild(importRow);
+
+    // Row 2: view buttons
+    const viewRow = document.createElement('div');
+    viewRow.style.cssText = 'display:flex; gap:4px; margin-top:4px;';
 
     const processBtn = window.KNLTBPanel.createButton('📊 Chart', 'Toggle rating chart');
     _chartBtn = processBtn;
@@ -1791,12 +1994,16 @@
     _statsBtn = statsBtn;
     statsBtn.onclick = showSeasonStats;
 
-    btnRow.appendChild(_importBtn);
-    btnRow.appendChild(_importAllBtn);
-    btnRow.appendChild(processBtn);
-    btnRow.appendChild(tableBtn);
-    btnRow.appendChild(statsBtn);
-    contentWrap.appendChild(btnRow);
+    [processBtn, tableBtn, statsBtn].forEach(btn => {
+      btn.style.flex = '1';
+      btn.style.minWidth = '0';
+      btn.style.padding = '4px 4px';
+      btn.style.textAlign = 'center';
+    });
+    viewRow.appendChild(processBtn);
+    viewRow.appendChild(tableBtn);
+    viewRow.appendChild(statsBtn);
+    contentWrap.appendChild(viewRow);
 
     const status = document.createElement("div");
     status.id = "knltbStatus";
@@ -1804,6 +2011,22 @@
     status.style.fontSize = "12px";
     status.style.opacity = "0.9";
     contentWrap.appendChild(status);
+
+    const progressWrap = document.createElement('div');
+    progressWrap.style.cssText = 'display:none; margin-top:6px;';
+    _progressBar = progressWrap;
+    const progressTrack = document.createElement('div');
+    progressTrack.style.cssText = 'background:#e0e0e0; border-radius:4px; height:5px; overflow:hidden;';
+    const progressFill = document.createElement('div');
+    progressFill.style.cssText = 'background:#193291; height:100%; border-radius:4px; transition:width 0.3s ease; width:0%;';
+    _progressFill = progressFill;
+    progressTrack.appendChild(progressFill);
+    const progressLbl = document.createElement('div');
+    progressLbl.style.cssText = 'font-size:11px; color:#888; margin-top:3px;';
+    _progressLabel = progressLbl;
+    progressWrap.appendChild(progressTrack);
+    progressWrap.appendChild(progressLbl);
+    contentWrap.appendChild(progressWrap);
 
     _dateFilterRow = document.createElement('div');
     _dateFilterRow.style.cssText = 'display:none; margin-top:6px;';
