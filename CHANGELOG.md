@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.2.0] — 2026-06-14
+
+### New features
+
+**Season range slider** (player profile)
+Clicking "Import All" now opens an inline dual-handle slider showing all available seasons from oldest (left) to newest (right), with a dot per season and short year labels. Drag the handles to select a range, then tap "Import" to start. Tapping "Import All" again dismisses the slider.
+
+**Last 3 seasons button** (player profile)
+A dedicated "Last 3" button imports the three most recent seasons in one tap — no slider interaction needed.
+
+**Match-by-match import ticker** (player profile)
+Match parsing is now asynchronous (one match per event loop tick) so the browser repaints between each match. The progress label shows the current match number, date, category, and win/loss icon as they flash by, giving live visual feedback during import.
+
+**Import progress bar** (player profile)
+A thin progress bar with a sub-label appears below the status line during any import and automatically hides when the import completes.
+
+**Touch-friendly date filter slider** (player profile)
+The date range slider now supports touch events (`touchstart`/`touchmove`/`touchend`) with `touch-action:none` to prevent scroll conflicts. Thumbs are enlarged to 26 px for easier tapping on mobile.
+
+**Panel auto-resize after import** (player profile)
+`fitPanelToContent` is called after every import finishes so the panel expands to fit newly visible content without needing a manual resize.
+
+### UX changes
+
+Import buttons are now split into two rows for better readability and touch ergonomics: **[Current | Last 3 | All]** on the top row and **[Chart | Matches | Stats]** on the bottom row.
+
+---
+
 ## [2.1.0] — 2026-06-11
 
 ### New features
