@@ -56,6 +56,12 @@ let dssLastChangedPlayers = new Set();
 let dssPanel = null;
 let lastImportSource = null;
 
+// Draw simulator display filter. { type: 'all' | 'player' | 'team', key: string }
+// key is a normalized player name (player) or a team key (team). Display-only:
+// ratings are always simulated over the full matchQueue so results stay correct.
+let dssFilter = { type: 'all', key: '' };
+let dssFilterSig = '';
+
 const toAbsUrl = (url) => {
   if (_ku) return _ku.toAbsUrl(url);
   if (!url) return null;

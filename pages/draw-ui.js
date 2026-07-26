@@ -53,6 +53,15 @@ function ensureSpinnerStyles() {
       cursor: default;
       box-shadow: none;
     }
+    .dss-panel .btn.btn--whatsapp {
+      background-color: #25D366;
+      border-color: transparent;
+      box-shadow: 0 1px 4px rgba(37, 211, 102, .5);
+      color: #fff;
+    }
+    .dss-panel .btn.btn--whatsapp:hover {
+      background-color: #1da851;
+    }
 
     /* --- Mobile responsiveness for Selected Matches panel --- */
     @media (max-width: 640px) {
@@ -212,6 +221,114 @@ function populatePlayerDropdown() {
   });
 }
 
+// Stable key for a team (order-independent) used to identify teams/pairs.
+function dssTeamKey(team) {
+  return (team && Array.isArray(team.players) ? team.players : [])
+    .map(p => normalizeName(p)).sort().join('|');
+}
+
+// Human label for a team/pair, e.g. "Alders & Jansen".
+function dssTeamLabel(team) {
+  return (team && Array.isArray(team.players) ? team.players : []).join(' & ');
+}
+
+// Does a single team/pair match the active filter?
+function teamMatchesFilter(team) {
+  if (!dssFilter || dssFilter.type === 'all') return true;
+  if (!team || !Array.isArray(team.players)) return false;
+  if (dssFilter.type === 'player') {
+    return team.players.some(p => normalizeName(p) === dssFilter.key);
+  }
+  if (dssFilter.type === 'team') {
+    return dssTeamKey(team) === dssFilter.key;
+  }
+  return true;
+}
+
+// Should a match row be shown given the active filter? (display-only)
+function matchPassesFilter(match) {
+  if (!dssFilter || dssFilter.type === 'all') return true;
+  if (!match) return false;
+  return teamMatchesFilter(match.team1) || teamMatchesFilter(match.team2);
+}
+
+// Build the player/team filter dropdown from the current match queue.
+// Rebuilds only when the available options change, so an open dropdown or the
+// current selection isn't disrupted on every re-render.
+function populateFilterDropdown() {
+  const select = document.getElementById('dss-filter-select');
+  if (!select) return;
+
+  const seenPlayers = new Set();
+  const players = [];
+  const seenTeams = new Set();
+  const teamOpts = [];
+
+  const addTeam = (t) => {
+    if (!t || !Array.isArray(t.players) || !t.players.length) return;
+    const key = dssTeamKey(t);
+    if (!seenTeams.has(key)) { seenTeams.add(key); teamOpts.push({ key, label: dssTeamLabel(t) }); }
+    t.players.forEach(p => {
+      const norm = normalizeName(p);
+      if (norm && !seenPlayers.has(norm)) { seenPlayers.add(norm); players.push({ norm, label: p }); }
+    });
+  };
+
+  const source = matchQueue.length
+    ? matchQueue.flatMap(m => [m && m.team1, m && m.team2])
+    : (Array.isArray(teams) ? teams : []);
+  source.forEach(addTeam);
+
+  players.sort((a, b) => a.label.localeCompare(b.label));
+  teamOpts.sort((a, b) => a.label.localeCompare(b.label));
+
+  // Only rebuild when the option set actually changed.
+  const sig = 'p:' + players.map(p => p.norm).join(',') + '|t:' + teamOpts.map(t => t.key).join(',');
+  if (sig === dssFilterSig) return;
+  dssFilterSig = sig;
+
+  // Preserve current selection if still available.
+  const prev = select.value;
+  select.innerHTML = '';
+
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all:';
+  allOpt.textContent = 'All matches';
+  select.appendChild(allOpt);
+
+  if (players.length) {
+    const pg = document.createElement('optgroup');
+    pg.label = 'Players';
+    players.forEach(({ norm, label }) => {
+      const o = document.createElement('option');
+      o.value = 'player:' + norm;
+      o.textContent = label;
+      pg.appendChild(o);
+    });
+    select.appendChild(pg);
+  }
+
+  if (teamOpts.length) {
+    const tg = document.createElement('optgroup');
+    tg.label = 'Teams / pairs';
+    teamOpts.forEach(({ key, label }) => {
+      const o = document.createElement('option');
+      o.value = 'team:' + key;
+      o.textContent = label;
+      tg.appendChild(o);
+    });
+    select.appendChild(tg);
+  }
+
+  // Restore previous selection, or reset filter if it's gone.
+  if (prev && select.querySelector(`option[value="${CSS.escape(prev)}"]`)) {
+    select.value = prev;
+  } else {
+    select.value = 'all:';
+    dssFilter = { type: 'all', key: '' };
+  }
+}
+
 function setupUI() {
   const { panel, contentWrap } = window.KNLTBPanel.createStandardPanel('KNLTB Tools - Draw', {
     id: 'dss-panel',
@@ -242,6 +359,83 @@ function setupUI() {
   actionRow.style.flexWrap = 'wrap';
   actionRow.style.margin = '0 0 12px 0';
   contentWrap.appendChild(actionRow);
+
+  // --- Filter + Share row ---
+  const toolsRow = document.createElement('div');
+  toolsRow.id = 'dss-tools-row';
+  toolsRow.style.display = 'none'; // hidden until matches are loaded
+  toolsRow.style.alignItems = 'center';
+  toolsRow.style.gap = '8px';
+  toolsRow.style.flexWrap = 'wrap';
+  toolsRow.style.margin = '0 0 12px 0';
+
+  const filterLabel = document.createElement('label');
+  filterLabel.textContent = 'Filter:';
+  filterLabel.htmlFor = 'dss-filter-select';
+  filterLabel.style.fontSize = '12px';
+  filterLabel.style.fontWeight = '600';
+  toolsRow.appendChild(filterLabel);
+
+  const filterSelect = document.createElement('select');
+  filterSelect.id = 'dss-filter-select';
+  filterSelect.style.fontSize = '13px';
+  filterSelect.style.padding = '8px 10px';
+  filterSelect.style.height = '38px';
+  filterSelect.style.borderRadius = '4px';
+  filterSelect.style.border = '1px solid rgba(0,0,0,0.2)';
+  filterSelect.style.maxWidth = '220px';
+  filterSelect.style.flex = '0 1 auto';
+  filterSelect.innerHTML = '<option value="all:">All matches</option>';
+  filterSelect.addEventListener('change', () => {
+    const val = filterSelect.value || 'all:';
+    const sep = val.indexOf(':');
+    const type = val.slice(0, sep);
+    const key = val.slice(sep + 1);
+    dssFilter = { type: type || 'all', key: key || '' };
+    renderMatches();
+  });
+  toolsRow.appendChild(filterSelect);
+
+  const copyBtn = document.createElement('a');
+  copyBtn.id = 'dss-copy-clipboard';
+  copyBtn.href = '#';
+  copyBtn.className = 'btn btn--primary';
+  copyBtn.style.display = 'inline-flex';
+  copyBtn.style.alignItems = 'center';
+  copyBtn.title = 'Copy the current (filtered) results to the clipboard';
+  copyBtn.innerHTML = `
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="margin-right:8px;">
+      <path d="M16 1H4a2 2 0 0 0-2 2v12h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/>
+    </svg>
+    <span class="nav-link__value">Copy</span>`;
+  copyBtn.onclick = function(e) { e.preventDefault(); copyResultsToClipboard(); };
+  toolsRow.appendChild(copyBtn);
+
+  const shareBtn = document.createElement('a');
+  shareBtn.id = 'dss-share-whatsapp';
+  shareBtn.href = '#';
+  shareBtn.className = 'btn btn--whatsapp';
+  shareBtn.style.display = 'inline-flex';
+  shareBtn.style.alignItems = 'center';
+  shareBtn.title = 'Open WhatsApp with the current (filtered) results prefilled';
+  shareBtn.innerHTML = `
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="margin-right:8px;">
+      <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.9-4.45 9.9-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2zm5.8 14.1c-.24.68-1.42 1.32-1.96 1.36-.5.05-.5.4-3.16-.66-2.66-1.05-4.32-3.77-4.45-3.95-.13-.17-1.06-1.42-1.06-2.7 0-1.29.67-1.92.91-2.18.24-.26.53-.33.71-.33.18 0 .35 0 .5.01.16.01.38-.06.59.45.24.59.81 2.03.88 2.18.07.14.12.31.02.5-.09.18-.14.29-.28.45-.14.16-.29.36-.42.48-.14.14-.28.29-.12.57.16.28.71 1.17 1.53 1.9 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.69-.81.87-1.09.18-.28.36-.23.61-.14.25.09 1.6.75 1.87.89.28.14.46.21.53.32.07.12.07.66-.17 1.34z"/>
+    </svg>
+    <span class="nav-link__value">Share to WhatsApp</span>`;
+  shareBtn.onclick = function(e) { e.preventDefault(); shareToWhatsApp(); };
+  toolsRow.appendChild(shareBtn);
+
+  const shareFeedback = document.createElement('div');
+  shareFeedback.id = 'dss-share-feedback';
+  shareFeedback.style.flex = '1 1 100%';
+  shareFeedback.style.fontSize = '11px';
+  shareFeedback.style.color = '#1a7f1a';
+  shareFeedback.style.margin = '0';
+  shareFeedback.style.minHeight = '0';
+  toolsRow.appendChild(shareFeedback);
+
+  contentWrap.appendChild(toolsRow);
   // Add "Automatically detect group matches" button (primary, as <a>)
   const autoGroupsBtn = document.createElement('a');
   autoGroupsBtn.id = 'autoGroupMatchesBtn';
@@ -607,6 +801,13 @@ function renderMatches() {
   }
   tbody.innerHTML = "";
 
+  // Keep the filter dropdown in sync with the current match queue.
+  populateFilterDropdown();
+
+  // Filter + share tools only make sense once matches have been loaded.
+  const toolsRow = document.getElementById('dss-tools-row');
+  if (toolsRow) toolsRow.style.display = matchQueue.length ? 'flex' : 'none';
+
   // Column visibility
   const matchType = detectMatchTypeFromPage();
   const showAvg = matchType !== 'single';
@@ -633,6 +834,7 @@ function renderMatches() {
   }
 
   let tempRatings = { ...playerRatings };
+  let visibleRowIndex = 0; // striping counter for filtered view
 
   matchQueue.forEach((match, index) => {
     // Defensive: skip malformed match entries that don't have expected shape
@@ -640,8 +842,10 @@ function renderMatches() {
       try { console.warn('[DSS] Skipping malformed match entry at index', index, match); } catch (e) {}
       return; // skip this entry
     }
+    // Display-only filter: ratings are still simulated for every match below so
+    // the running totals stay correct; we just don't render hidden rows.
+    const visible = matchPassesFilter(match);
     const tr = document.createElement("tr");
-    if (index % 2 === 1) tr.style.backgroundColor = "#f2f2f2";
 
     const tdDate = document.createElement("td");
     const td1 = document.createElement("td");
@@ -857,8 +1061,26 @@ function renderMatches() {
       }
     }
 
-    tbody.appendChild(tr);
+    if (visible) {
+      if (visibleRowIndex % 2 === 1) tr.style.backgroundColor = "#f2f2f2";
+      visibleRowIndex++;
+      tbody.appendChild(tr);
+    }
   });
+
+  // If a filter is active and hides everything, show a helpful message.
+  if (visibleRowIndex === 0) {
+    const emptyRow = document.createElement('tr');
+    const emptyCell = document.createElement('td');
+    emptyCell.colSpan = 11 - (showAvg ? 0 : 1) - (showCategory ? 0 : 1);
+    emptyCell.textContent = 'No matches for the selected filter.';
+    emptyCell.style.padding = '12px 8px';
+    emptyCell.style.textAlign = 'center';
+    emptyCell.style.color = '#444';
+    emptyCell.style.fontStyle = 'italic';
+    emptyRow.appendChild(emptyCell);
+    tbody.appendChild(emptyRow);
+  }
 
   // --- Build Player Rating Summary (grouped by team) ---
   const summaryTable = document.getElementById('dss-summary');
@@ -872,6 +1094,7 @@ function renderMatches() {
     matchQueue.forEach(m => {
       [m.team1, m.team2].forEach(t => {
         if (!t || !t.players) return;
+        if (!teamMatchesFilter(t)) return; // respect active filter
         const k = keyForTeam(t);
         if (!seenTeams.has(k)) { seenTeams.add(k); teamList.push(t); }
       });
@@ -879,6 +1102,7 @@ function renderMatches() {
     // Fallback: if no matches yet, show teams parsed from table
     if (teamList.length === 0 && Array.isArray(teams)) {
       teams.forEach(t => {
+        if (!teamMatchesFilter(t)) return;
         const k = keyForTeam(t);
         if (!seenTeams.has(k)) { seenTeams.add(k); teamList.push(t); }
       });
@@ -952,4 +1176,277 @@ function renderMatches() {
 
 function recomputeRatings() {
   renderMatches();
+}
+
+// Run the same sequential rating simulation as renderMatches, but return
+// structured data instead of touching the DOM. Used by the WhatsApp share.
+function computeSimulationData() {
+  // Chronological order (mirror renderMatches sort so ratings match the UI).
+  const paired = matchQueue
+    .map((m, i) => ({ m, i, t: _ku ? _ku.getMatchTimestamp(m) : null }))
+    .filter(x => x.m && x.m.team1 && x.m.team2 &&
+      Array.isArray(x.m.team1.players) && Array.isArray(x.m.team2.players));
+  paired.sort((A, B) => {
+    if (A.t === null && B.t === null) return A.i - B.i;
+    if (A.t === null) return 1;
+    if (B.t === null) return -1;
+    if (A.t === B.t) return A.i - B.i;
+    return A.t - B.t;
+  });
+
+  const tempRatings = { ...playerRatings };
+  const q = 2.012;
+  const rows = [];
+
+  paired.forEach(({ m: match }) => {
+    const t1 = match.team1.players;
+    const t2 = match.team2.players;
+    const t1Old = t1.map(p => tempRatings[normalizeName(p)] ?? 0);
+    const t2Old = t2.map(p => tempRatings[normalizeName(p)] ?? 0);
+    const avg = arr => arr.length ? arr.reduce((a, b) => a + (b ?? 0), 0) / arr.length : 0;
+    const t1Avg = avg(t1Old);
+    const t2Avg = avg(t2Old);
+    const expT1 = 1 / (1 + Math.exp(q * (t1Avg - t2Avg)));
+
+    let resultStr = '';
+    if (Array.isArray(match.score) && match.score.length) {
+      resultStr = match.score.map(p => `${p[0]}-${p[1]}`).join(' ');
+    } else if (match.result) {
+      const r = String(match.result).toLowerCase();
+      resultStr = r === 'walkover' ? 'Walkover' : (r === 'opgave' ? 'Opgave' : match.result);
+    }
+
+    // Apply winner to the running ratings, mirroring renderMatches exactly, and
+    // record the per-match rating change for each player involved.
+    const changes = [];
+    if (match.winner) {
+      const teamSize = t1.length;
+      const skip = (match.result === 'walkover' && teamSize === 2);
+      if (!skip) {
+        const r1 = t1Old[0];
+        const r2 = t1[1] ? t1Old[1] : r1;
+        const r3 = t2Old[0];
+        const r4 = t2[1] ? t2Old[1] : r3;
+        const impact = match.winner === 'team1'
+          ? calculateTeamRatingImpact(r1, r2, r3, r4)
+          : calculateTeamRatingImpact(r3, r4, r1, r2);
+        if (match.winner === 'team1') {
+          if (t1[0]) tempRatings[normalizeName(t1[0])] = impact.newTeam1Rating1;
+          if (t1[1]) tempRatings[normalizeName(t1[1])] = impact.newTeam1Rating2;
+          if (t2[0]) tempRatings[normalizeName(t2[0])] = impact.newTeam2Rating1;
+          if (t2[1]) tempRatings[normalizeName(t2[1])] = impact.newTeam2Rating2;
+        } else {
+          if (t2[0]) tempRatings[normalizeName(t2[0])] = impact.newTeam1Rating1;
+          if (t2[1]) tempRatings[normalizeName(t2[1])] = impact.newTeam1Rating2;
+          if (t1[0]) tempRatings[normalizeName(t1[0])] = impact.newTeam2Rating1;
+          if (t1[1]) tempRatings[normalizeName(t1[1])] = impact.newTeam2Rating2;
+        }
+        const pushChange = (name, oldR) => {
+          const nn = normalizeName(name);
+          const newR = tempRatings[nn] ?? oldR;
+          changes.push({ name, old: oldR, new: newR, delta: newR - oldR });
+        };
+        t1.forEach((p, i) => pushChange(p, t1Old[i]));
+        t2.forEach((p, i) => pushChange(p, t2Old[i]));
+      }
+    }
+
+    rows.push({
+      team1: match.team1,
+      team2: match.team2,
+      date: match.dateTime || match.date || '',
+      category: match.category || '',
+      t1Pct: expT1 * 100,
+      t2Pct: 100 - expT1 * 100,
+      winner: match.winner || null,
+      resultStr,
+      changes
+    });
+  });
+
+  // Player rating summary, grouped by team (respecting the active filter).
+  const summary = [];
+  const seenTeams = new Set();
+  const addTeamSummary = (t) => {
+    if (!t || !Array.isArray(t.players) || !teamMatchesFilter(t)) return;
+    const key = dssTeamKey(t);
+    if (seenTeams.has(key)) return;
+    seenTeams.add(key);
+    const players = t.players.map(p => {
+      const nn = normalizeName(p);
+      const start = playerBaselineRatings[nn] ?? playerRatings[nn] ?? 0;
+      const current = tempRatings[nn] ?? playerRatings[nn] ?? start;
+      return { name: p, start, current, diff: current - start };
+    });
+    summary.push({ label: dssTeamLabel(t), players });
+  };
+  const summarySource = matchQueue.length
+    ? matchQueue.flatMap(m => [m && m.team1, m && m.team2])
+    : (Array.isArray(teams) ? teams : []);
+  summarySource.forEach(addTeamSummary);
+
+  return { rows, summary };
+}
+
+// Suffix describing a rating change, matching the in-app convention:
+// KNLTB ratings are "lower is better", so a NEGATIVE delta (rating went down)
+// is good → green up-triangle; a POSITIVE delta (rating went up) is bad → red
+// down-triangle. The colored circle carries the good/bad colour into WhatsApp
+// (which can't colour text); it sits at the line end so it never disturbs the
+// alignment of the numeric columns in a monospace block.
+function dssDeltaGlyphs(delta) {
+  if (delta < 0) return { arrow: '▲', circle: '🟢' }; // win → rating down → good
+  if (delta > 0) return { arrow: '▼', circle: '🔴' }; // loss → rating up → bad
+  return { arrow: '•', circle: '⚪' };
+}
+
+// Format one "name  old → new  ▲delta 🟢" line, padding the name for alignment.
+function dssRatingLine(name, nameW, oldR, newR, delta) {
+  const { arrow, circle } = dssDeltaGlyphs(delta);
+  return `${String(name).padEnd(nameW)}  ${oldR.toFixed(4)} → ${newR.toFixed(4)}  ${arrow}${Math.abs(delta).toFixed(4)} ${circle}`;
+}
+
+// Build WhatsApp-friendly text for the current (filtered) results.
+// Per-match rating changes are the headline content, followed by a cumulative
+// per-player summary.
+function buildShareText() {
+  let title = 'KNLTB loting';
+  try {
+    if (typeof detectCurrentEventTitles === 'function') {
+      const det = detectCurrentEventTitles();
+      title = (det && (det.rawTitle || det.eventType)) || title;
+    }
+  } catch {}
+
+  const { rows, summary } = computeSimulationData();
+  const visibleRows = rows.filter(r => matchPassesFilter(r));
+
+  const lines = [];
+  lines.push(`🎾 *${title}*`);
+
+  let scope = '';
+  if (dssFilter && (dssFilter.type === 'player' || dssFilter.type === 'team')) {
+    const opt = document.querySelector(
+      `#dss-filter-select option[value="${CSS.escape(dssFilter.type + ':' + dssFilter.key)}"]`
+    );
+    scope = opt ? opt.textContent : '';
+  }
+  if (scope) lines.push(`_Filter: ${scope}_`);
+
+  // --- Matches (with per-match rating changes) ---
+  lines.push('');
+  lines.push(`*Wedstrijden* (${visibleRows.length})`);
+  if (!visibleRows.length) {
+    lines.push('_Geen wedstrijden_');
+  } else {
+    // Name column width across all per-match change lines, for alignment.
+    const nameW = Math.max(
+      0,
+      ...visibleRows.flatMap(r => (r.changes || []).map(c => c.name.length))
+    );
+    const block = [];
+    visibleRows.forEach((r, i) => {
+      if (i > 0) block.push('');
+      if (r.date) block.push(r.date);
+      const t1 = (r.winner === 'team1' ? '🏆 ' : '') + dssTeamLabel(r.team1);
+      const t2 = (r.winner === 'team2' ? '🏆 ' : '') + dssTeamLabel(r.team2);
+      block.push(`${t1}  vs  ${t2}`);
+      const meta = [`kans ${r.t1Pct.toFixed(0)}% | ${r.t2Pct.toFixed(0)}%`];
+      if (r.resultStr) meta.push(r.resultStr);
+      block.push(meta.join(' · '));
+      if (r.changes && r.changes.length) {
+        r.changes.forEach(c => block.push(dssRatingLine(c.name, nameW, c.old, c.new, c.delta)));
+      } else if (r.winner) {
+        block.push('(geen rating-impact)');
+      }
+    });
+    lines.push('```');
+    lines.push(...block);
+    lines.push('```');
+  }
+
+  // --- Cumulative rating changes per player ---
+  if (summary.length) {
+    const allPlayers = summary.flatMap(t => t.players);
+    const nameW = Math.max(0, ...allPlayers.map(p => p.name.length));
+    lines.push('');
+    lines.push('*Rating totaal (start → nu)*');
+    const block = [];
+    summary.forEach((team, ti) => {
+      if (ti > 0) block.push('');
+      team.players.forEach(p => {
+        block.push(dssRatingLine(p.name, nameW, p.start, p.current, p.diff));
+      });
+    });
+    lines.push('```');
+    lines.push(...block);
+    lines.push('```');
+  }
+
+  return lines.join('\n');
+}
+
+// Copy text to the clipboard, with a legacy fallback for older contexts.
+function dssCopyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error('execCommand copy failed'));
+    } catch (e) { reject(e); }
+  });
+}
+
+function dssShareFeedback(msg, ok = true) {
+  const feedback = document.getElementById('dss-share-feedback');
+  if (!feedback) return;
+  feedback.textContent = msg;
+  feedback.style.color = ok ? '#1a7f1a' : '#b00';
+}
+
+// Copy the current (filtered) results to the clipboard (no WhatsApp).
+function copyResultsToClipboard() {
+  let text;
+  try {
+    text = buildShareText();
+  } catch (e) {
+    console.warn('[DSS] Failed to build share text', e);
+    dssShareFeedback('Could not build results text.', false);
+    return;
+  }
+  dssCopyToClipboard(text)
+    .then(() => dssShareFeedback('Copied to clipboard ✓'))
+    .catch((e) => {
+      console.warn('[DSS] Clipboard copy failed', e);
+      dssShareFeedback('Could not copy to clipboard.', false);
+    });
+}
+
+// Open WhatsApp with the current (filtered) results prefilled.
+function shareToWhatsApp() {
+  let text;
+  try {
+    text = buildShareText();
+  } catch (e) {
+    console.warn('[DSS] Failed to build share text', e);
+    dssShareFeedback('Could not build results text.', false);
+    return;
+  }
+  try {
+    const url = 'https://wa.me/?text=' + encodeURIComponent(text);
+    const win = window.open(url, '_blank', 'noopener,noreferrer');
+    dssShareFeedback(win ? 'Opened WhatsApp.' : 'Popup blocked — use Copy instead.', !!win);
+  } catch (e) {
+    console.warn('[DSS] Failed to open WhatsApp', e);
+    dssShareFeedback('Could not open WhatsApp — use Copy instead.', false);
+  }
 }
