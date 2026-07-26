@@ -8,7 +8,7 @@
 A new **Filter** dropdown above the match table lists every player and every team/pair in the loaded matches. Selecting one shows only the matches that player or pair appears in, and narrows the player rating summary to match. The filter is display-only: ratings are still simulated over the full match queue in chronological order, so the numbers stay correct regardless of the filter.
 
 **Copy / Share to WhatsApp** (draw simulator)
-Two new buttons turn the current (filtered) results into WhatsApp-friendly text: **Copy** puts it on the clipboard, and **Share to WhatsApp** opens WhatsApp with it prefilled. The text leads with per-match rating changes (each player's start → new rating with a coloured triangle — green ▲ for a rating drop / win, red ▼ for a rating rise / loss, matching the in-app convention), followed by win %, result, and a cumulative per-player total. The filter and both buttons stay hidden until matches are loaded via **Show Matches** or **Find all**.
+Two new buttons turn the current (filtered) results into WhatsApp-friendly text: **Copy** puts it on the clipboard, and **Share to WhatsApp** opens WhatsApp with it prefilled. The text leads with per-match rating changes (each player's start → new rating with a triangle — ▲ for a rating drop / win, ▼ for a rating rise / loss, matching the in-app convention), followed by win %, result, and a cumulative per-player total. Winning team names are shown in bold. The filter and both buttons stay hidden until matches are loaded via **Show Matches** or **Find all**.
 
 ---
 

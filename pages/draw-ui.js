@@ -1288,22 +1288,18 @@ function computeSimulationData() {
   return { rows, summary };
 }
 
-// Suffix describing a rating change, matching the in-app convention:
+// Triangle describing a rating change, matching the in-app convention:
 // KNLTB ratings are "lower is better", so a NEGATIVE delta (rating went down)
-// is good → green up-triangle; a POSITIVE delta (rating went up) is bad → red
-// down-triangle. The colored circle carries the good/bad colour into WhatsApp
-// (which can't colour text); it sits at the line end so it never disturbs the
-// alignment of the numeric columns in a monospace block.
-function dssDeltaGlyphs(delta) {
-  if (delta < 0) return { arrow: '▲', circle: '🟢' }; // win → rating down → good
-  if (delta > 0) return { arrow: '▼', circle: '🔴' }; // loss → rating up → bad
-  return { arrow: '•', circle: '⚪' };
+// is good → up-triangle; a POSITIVE delta (rating went up) is bad → down-triangle.
+function dssDeltaArrow(delta) {
+  if (delta < 0) return '▲'; // win → rating down → good
+  if (delta > 0) return '▼'; // loss → rating up → bad
+  return '•';
 }
 
-// Format one "name  old → new  ▲delta 🟢" line, padding the name for alignment.
+// Format one "name  old → new  ▲ delta" line, padding the name for alignment.
 function dssRatingLine(name, nameW, oldR, newR, delta) {
-  const { arrow, circle } = dssDeltaGlyphs(delta);
-  return `${String(name).padEnd(nameW)}  ${oldR.toFixed(4)} → ${newR.toFixed(4)}  ${arrow}${Math.abs(delta).toFixed(4)} ${circle}`;
+  return `${String(name).padEnd(nameW)}  ${oldR.toFixed(4)} → ${newR.toFixed(4)}  ${dssDeltaArrow(delta)} ${Math.abs(delta).toFixed(4)}`;
 }
 
 // Build WhatsApp-friendly text for the current (filtered) results.
@@ -1334,6 +1330,9 @@ function buildShareText() {
   if (scope) lines.push(`_Filter: ${scope}_`);
 
   // --- Matches (with per-match rating changes) ---
+  // Match headers are plain text so the winning team name can be *bold* (bold
+  // isn't rendered inside a monospace block); the aligned rating lines go in a
+  // monospace block underneath.
   lines.push('');
   lines.push(`*Wedstrijden* (${visibleRows.length})`);
   if (!visibleRows.length) {
@@ -1344,25 +1343,23 @@ function buildShareText() {
       0,
       ...visibleRows.flatMap(r => (r.changes || []).map(c => c.name.length))
     );
-    const block = [];
-    visibleRows.forEach((r, i) => {
-      if (i > 0) block.push('');
-      if (r.date) block.push(r.date);
-      const t1 = (r.winner === 'team1' ? '🏆 ' : '') + dssTeamLabel(r.team1);
-      const t2 = (r.winner === 'team2' ? '🏆 ' : '') + dssTeamLabel(r.team2);
-      block.push(`${t1}  vs  ${t2}`);
+    visibleRows.forEach((r) => {
+      lines.push('');
+      if (r.date) lines.push(r.date);
+      const t1 = r.winner === 'team1' ? `*${dssTeamLabel(r.team1)}*` : dssTeamLabel(r.team1);
+      const t2 = r.winner === 'team2' ? `*${dssTeamLabel(r.team2)}*` : dssTeamLabel(r.team2);
+      lines.push(`${t1}  vs  ${t2}`);
       const meta = [`kans ${r.t1Pct.toFixed(0)}% | ${r.t2Pct.toFixed(0)}%`];
       if (r.resultStr) meta.push(r.resultStr);
-      block.push(meta.join(' · '));
+      lines.push(meta.join(' · '));
       if (r.changes && r.changes.length) {
-        r.changes.forEach(c => block.push(dssRatingLine(c.name, nameW, c.old, c.new, c.delta)));
+        lines.push('```');
+        r.changes.forEach(c => lines.push(dssRatingLine(c.name, nameW, c.old, c.new, c.delta)));
+        lines.push('```');
       } else if (r.winner) {
-        block.push('(geen rating-impact)');
+        lines.push('(geen rating-impact)');
       }
     });
-    lines.push('```');
-    lines.push(...block);
-    lines.push('```');
   }
 
   // --- Cumulative rating changes per player ---
