@@ -18,3 +18,6 @@ npm-debug.log*
 
 # tmp folder
 tmp/
+
+# Build output
+dist/

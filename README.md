@@ -174,6 +174,12 @@ Install directly from the [Chrome Web Store](https://chromewebstore.google.com/d
 
 The extension activates automatically on `mijnknltb.toernooi.nl`.
 
+### Publishing a new version
+
+`scripts/package.sh` builds the store zip from the file list in `manifest.json`, and
+`scripts/publish-chrome.sh` uploads it via the Chrome Web Store API. See
+[docs/chrome-web-store.md](docs/chrome-web-store.md) for the one-time credential setup.
+
 ---
 
 ## Project structure
@@ -182,6 +188,8 @@ The extension activates automatically on `mijnknltb.toernooi.nl`.
 manifest.json              Chrome extension manifest (MV3)
 icon.png                   Extension icon
 assets/                    Screenshots used in this README
+docs/                      Release and publishing notes
+scripts/                   Packaging and Chrome Web Store upload
 pages/
   draw.js                  Entry point for draw / group pages
   draw-import.js           Match and player data fetching
