@@ -126,6 +126,30 @@ function normalizeCategoryLabel(txt) {
   return null;
 }
 
+// Parsed rating tables keyed by absolute profile URL. A player's profile ratings do
+// not change while the page is open, so repeat lookups — the same player reached
+// under two name spellings, or a second import in the same session — reuse the first
+// request instead of refetching. Stores the in-flight promise, so concurrent callers
+// for one URL share a single fetch. Failures are evicted so they can be retried.
+const _profileRatingsCache = new Map();
+
+function fetchProfileRatingsObj(abs) {
+  const cached = _profileRatingsCache.get(abs);
+  if (cached) return cached;
+  const pending = parseProfileRatings(abs).then(
+    (obj) => {
+      if (!obj) _profileRatingsCache.delete(abs);
+      return obj;
+    },
+    (err) => {
+      _profileRatingsCache.delete(abs);
+      throw err;
+    }
+  );
+  _profileRatingsCache.set(abs, pending);
+  return pending;
+}
+
 // Fetch a player profile URL and attempt to extract a rating for the requested matchType.
 // Returns a Promise resolving to a number (rating) or null on failure.
 async function fetchProfileRating(profileUrl, preferredMatchType = null) {
@@ -133,6 +157,23 @@ async function fetchProfileRating(profileUrl, preferredMatchType = null) {
     if (!profileUrl) return null;
     const abs = toAbsUrl(profileUrl);
     if (!abs) return null;
+    const ratingsObj = await fetchProfileRatingsObj(abs);
+    if (!ratingsObj) return null;
+
+    // Pick preferred match type first, else any available
+    let applied = null;
+    if (preferredMatchType && ratingsObj[preferredMatchType]) applied = ratingsObj[preferredMatchType];
+    applied = applied ?? ratingsObj.single ?? ratingsObj.double ?? ratingsObj.padel ?? null;
+    return (typeof applied === 'number' && !Number.isNaN(applied)) ? applied : null;
+  } catch (e) {
+    console.warn('[DSS] fetchProfileRating error for', profileUrl, e);
+    return null;
+  }
+}
+
+// Fetch and parse one profile page into { single?, double?, padel? }, or null.
+async function parseProfileRatings(abs) {
+  try {
     const resp = await fetch(abs, { credentials: 'include' });
     if (!resp.ok) return null;
     const html = await resp.text();
@@ -177,13 +218,9 @@ async function fetchProfileRating(profileUrl, preferredMatchType = null) {
       });
     }
 
-    // Pick preferred match type first, else any available
-    let applied = null;
-    if (preferredMatchType && ratingsObj[preferredMatchType]) applied = ratingsObj[preferredMatchType];
-    applied = applied ?? ratingsObj.single ?? ratingsObj.double ?? ratingsObj.padel ?? null;
-    return (typeof applied === 'number' && !Number.isNaN(applied)) ? applied : null;
+    return ratingsObj;
   } catch (e) {
-    console.warn('[DSS] fetchProfileRating error for', profileUrl, e);
+    console.warn('[DSS] parseProfileRatings error for', abs, e);
     return null;
   }
 }

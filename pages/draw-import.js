@@ -87,10 +87,13 @@ async function refreshPlayerRatings() {
 
   const playerEntries = Object.entries(playerUrls);
   const totalPlayers = playerEntries.length;
-  let playerIndex = 0;
+  let playersDone = 0;
+  setProgress(0, totalPlayers, '');
 
-  for (const [normName, url] of playerEntries) {
-    playerIndex++;
+  // Each profile writes only its own player's key, so fetching them concurrently
+  // produces exactly the same ratings — it just stops waiting for one profile
+  // before requesting the next.
+  await mapWithConcurrency(playerEntries, async ([normName, url]) => {
     // Resolve display name for progress
     let displayName = normName;
     for (const team of teams) {
@@ -98,7 +101,6 @@ async function refreshPlayerRatings() {
         if (normalizeName(p) === normName) { displayName = p; break; }
       }
     }
-    setProgress(playerIndex, totalPlayers, displayName);
 
     try {
       // If url is relative, construct absolute URL
@@ -109,7 +111,7 @@ async function refreshPlayerRatings() {
       const resp = await fetch(absUrl, { credentials: "include" });
       if (!resp.ok) {
         console.warn(`[DSS] Failed to fetch profile for ${normName} (${url}).`);
-        continue;
+        return;
       }
       const html = await resp.text();
       const parser = new DOMParser();
@@ -122,7 +124,7 @@ async function refreshPlayerRatings() {
       const looksLikeLogin = /inloggen|login|wachtwoord|password/i.test(bodyText) || doc.querySelector('form[action*="login"], input[type="password"]');
       if (looksLikeLogin) {
         console.warn(`[DSS] Profile fetch appears to be a login page for ${normName}. Skipping.`);
-        continue;
+        return;
       }
 
       // Robust extraction:
@@ -247,8 +249,11 @@ async function refreshPlayerRatings() {
       }
     } catch (e) {
       console.warn(`[DSS] Error fetching or parsing profile for ${normName} (${url}):`, e);
+    } finally {
+      // Count completions so the progress bar only ever moves forward
+      setProgress(++playersDone, totalPlayers, displayName);
     }
-  }
+  });
 
   // Compute which players changed
   const changed = new Set();
@@ -306,7 +311,7 @@ function waitForGroupLinks(timeoutMs = 10000) {
   });
 }
 
-function loadGroupPageViaIframe(url, timeoutMs = 15000) {
+function loadGroupPageViaIframe(url, timeoutMs = 15000, settleMs = 1200) {
   return new Promise((resolve) => {
     try {
       const iframe = document.createElement('iframe');
@@ -318,23 +323,35 @@ function loadGroupPageViaIframe(url, timeoutMs = 15000) {
       const cleanUp = () => {
         if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
       };
+      const docOf = () => {
+        try { return iframe.contentDocument || iframe.contentWindow?.document || null; }
+        catch (e) { console.warn('[DSS] [auto] Could not access iframe document for', url, e); return null; }
+      };
 
+      let tLoad = null;   // set when the iframe fires 'load'
       const finish = () => {
         if (done) return;
         done = true;
+        const doc = docOf();
+        // Split the cost: everything before 'load' is network, everything after is the
+        // settle wait. Only the second half is ours to optimise.
         try {
-          const doc = iframe.contentDocument || iframe.contentWindow?.document;
-          resolve(doc || null);
-        } catch (e) {
-          console.warn('[DSS] [auto] Could not access iframe document for', url, e);
-          resolve(null);
-        } finally {
-          cleanUp();
-        }
+          if (tLoad !== null) dssTiming.count('iframe settle ms', Math.round(performance.now() - tLoad));
+          dssTiming.count('iframe matches found', doc ? doc.querySelectorAll('.match-group .match').length : 0);
+        } catch (e) {}
+        try { resolve(doc || null); } finally { cleanUp(); }
       };
 
+      // The page fills its match list in client-side after load, so we wait a fixed
+      // window before reading it. Do NOT replace this with "poll until the match count
+      // stops changing": a test against a page whose matches arrive in bursts showed
+      // that heuristic returning 4 matches when the page ended up with 15, because two
+      // steady samples are not proof the page is finished. Silently importing a subset
+      // is far worse than waiting. Any replacement needs a real readiness signal from
+      // the page, not a stability guess.
       iframe.addEventListener('load', () => {
-        setTimeout(finish, 1200);
+        tLoad = performance.now();
+        setTimeout(finish, settleMs);
       });
 
       setTimeout(finish, timeoutMs);
@@ -634,6 +651,8 @@ function loadImportedMatches() {
 async function autoDetectGroupMatches() {
   lastImportSource = 'local';
   setLoading(true, 'Detecting group matches…');
+  dssTiming.reset();
+  const _tShow = dssTiming.now();
   try {
     // Wait for dynamic group links if the page loads them late
     const ready = await waitForGroupLinks(8000);
@@ -679,45 +698,59 @@ async function autoDetectGroupMatches() {
     _log(`[DSS] [auto] Found ${groupLinks.length} group links.`);
 
     const totalGroups = groupLinks.length;
-    let groupIndex = 0;
-    const allMatches = [];
-    for (const a of groupLinks) {
+    let groupsDone = 0;
+    setProgress(0, totalGroups, '', 'Group');
+
+    // Fetch the group pages concurrently. mapWithConcurrency returns results in input
+    // order, so flattening below yields exactly the same match list as the previous
+    // sequential loop — only the waiting is overlapped.
+    const perGroup = await mapWithConcurrency(groupLinks, async (a, gi) => {
       const url = toAbsUrl(a.getAttribute('href'));
-      if (!url) continue;
-      groupIndex++;
-      const groupName = (a.textContent || '').trim() || `Group ${groupIndex}`;
-      setProgress(groupIndex, totalGroups, groupName, 'Group');
+      const groupName = (a.textContent || '').trim() || `Group ${gi + 1}`;
 
-      _log(`[DSS] [auto] Fetching group page: ${url}`);
-      const resp = await fetch(url, { credentials: 'include' });
-      if (!resp.ok) {
-        console.warn(`[DSS] [auto] Failed to fetch ${url}`);
-        continue;
-      }
-      const html = await resp.text();
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-
-      let extracted = extractMatchesFromDoc(doc);
-      // Capture a human-friendly category label for this group page and attach to extracted matches
+      let extracted = null;
       try {
-        const titleLabel = (doc.querySelector('.page-subhead .media__title .nav-link__value') || doc.querySelector('.module__title .nav-link__value') || doc.querySelector('.module__title') || doc.querySelector('.media__title'))?.textContent?.trim() || (doc.title || '').trim();
-        if (extracted && extracted.length && titleLabel) {
-          extracted.forEach(m => { try { if (!m.category) m.category = titleLabel; if (!m._source) m._source = url; } catch(e){} });
+        if (!url) return null;
+        _log(`[DSS] [auto] Fetching group page: ${url}`);
+        const resp = await fetch(url, { credentials: 'include' });
+        if (!resp.ok) {
+          console.warn(`[DSS] [auto] Failed to fetch ${url}`);
+          return null;
         }
-      } catch (e) {}
-      _log(`[DSS] [auto] Extracted ${extracted.length} matches from ${url}`);
-      if (!extracted || extracted.length === 0) {
-        _log('[DSS] [auto] No matches via fetch. Trying iframe fallback for', url);
-        const iframeDoc = await loadGroupPageViaIframe(url);
-        if (iframeDoc) {
-          extracted = extractMatchesFromDoc(iframeDoc);
-          _log(`[DSS] [auto] Iframe extracted ${extracted.length} matches from ${url}`);
-        } else {
-          console.warn('[DSS] [auto] Iframe fallback returned no document for', url);
+        const html = await resp.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+
+        extracted = extractMatchesFromDoc(doc);
+        // Capture a human-friendly category label for this group page and attach to extracted matches
+        try {
+          const titleLabel = (doc.querySelector('.page-subhead .media__title .nav-link__value') || doc.querySelector('.module__title .nav-link__value') || doc.querySelector('.module__title') || doc.querySelector('.media__title'))?.textContent?.trim() || (doc.title || '').trim();
+          if (extracted && extracted.length && titleLabel) {
+            extracted.forEach(m => { try { if (!m.category) m.category = titleLabel; if (!m._source) m._source = url; } catch(e){} });
+          }
+        } catch (e) {}
+        _log(`[DSS] [auto] Extracted ${extracted.length} matches from ${url}`);
+        if (!extracted || extracted.length === 0) {
+          _log('[DSS] [auto] No matches via fetch. Trying iframe fallback for', url);
+          dssTiming.count('iframe: no matches');
+          const iframeDoc = await dssTiming.track('iframe fallback', () => loadGroupPageViaIframe(url));
+          if (iframeDoc) {
+            extracted = extractMatchesFromDoc(iframeDoc);
+            _log(`[DSS] [auto] Iframe extracted ${extracted.length} matches from ${url}`);
+          } else {
+            console.warn('[DSS] [auto] Iframe fallback returned no document for', url);
+          }
         }
+      } finally {
+        // Count completions rather than start index so the progress bar stays monotonic
+        setProgress(++groupsDone, totalGroups, groupName, 'Group');
       }
-      allMatches.push(...(extracted || []));
+      return extracted || null;
+    }, DSS_IFRAME_CONCURRENCY);
+    dssTiming.mark(`group pages (${totalGroups})`, _tShow);
+
+    const allMatches = [];
+    for (const extracted of perGroup) {
+      if (extracted) allMatches.push(...extracted);
     }
 
     if (allMatches.length === 0) {
@@ -740,6 +773,9 @@ async function autoDetectGroupMatches() {
     console.error('[DSS] [auto] Error during automatic group match detection:', e);
     const status = document.getElementById('matchStatus');
     if (status) status.textContent = 'Error while auto-detecting group matches (see console).';
+  } finally {
+    dssTiming.mark('TOTAL', _tShow);
+    dssTiming.report('Show Matches');
   }
 }
 
@@ -850,6 +886,8 @@ async function findAllSimilarCategories() {
   lastImportSource = 'findAll';
   _log('[DSS] findAllSimilarCategories: triggered');
   setLoading(true, 'Finding similar categories for players…');
+  dssTiming.reset();
+  const _tFindAll = dssTiming.now();
   try {
     // Collect all player links on the current event page (table.ruler entries)
     const playerAnchors = Array.from(document.querySelectorAll('table.ruler a.nav-link, table.ruler a')).filter(a => (a.textContent || '').trim());
@@ -905,42 +943,10 @@ async function findAllSimilarCategories() {
     // Fallback: map of category page URL -> anchor text we followed from profile pages
     const discoveredCategoryAnchors = {};
 
-    // Helper: map over items with limited concurrency and cancellation support.
-    // This implementation PRESERVES input order by storing results at the
-    // same index as their source item. That removes nondeterminism caused by
-    // pushing results in completion order (which changed across runs).
-    // items must be an array or iterable; mapper may receive (item, index).
-    const mapWithConcurrency = async (items, mapper, concurrency = 6) => {
-      const arr = Array.isArray(items) ? items : Array.from(items);
-      const results = new Array(arr.length);
-      let idx = 0; // next index to start
-      let active = 0;
-      return new Promise((resolve) => {
-        const next = () => {
-          if (!window._dssFindAllRunning) return resolve(results);
-          if (idx >= arr.length) {
-            if (active === 0) resolve(results);
-            return;
-          }
-          const currentIndex = idx++;
-          active++;
-          (async () => {
-            try {
-              const res = await mapper(arr[currentIndex], currentIndex);
-              results[currentIndex] = res;
-            } catch (e) {
-              results[currentIndex] = null;
-            } finally {
-              active--;
-              // Schedule next worker
-              next();
-            }
-          })();
-        };
-        const starters = Math.min(Math.max(1, concurrency), arr.length);
-        for (let i = 0; i < starters; i++) next();
-      });
-    };
+    // Order-preserving bounded-concurrency map (see draw-state.js), wired to this
+    // run's cancellation flag.
+    const mapConcurrent = (items, mapper, concurrency = DSS_FETCH_CONCURRENCY) =>
+      mapWithConcurrency(items, mapper, concurrency, () => window._dssFindAllRunning);
 
     // Determine current page match type (single/double/padel) and only follow category
     // links that map to the same match type. This avoids following a profile to a
@@ -951,8 +957,8 @@ async function findAllSimilarCategories() {
     // Phase 0: always fetch the current event's own group pages as a guaranteed baseline.
     // Profile-based discovery finds *additional* categories; this ensures the starting
     // 15 (or however many) matches from the current draw are always included.
+    let baseGroupLinks = [];
     {
-      let baseGroupLinks = [];
       const baseTables = document.querySelectorAll('table.ruler');
       for (const table of baseTables) {
         for (const row of table.querySelectorAll('tbody tr')) {
@@ -974,61 +980,76 @@ async function findAllSimilarCategories() {
         baseHrefSet.add(href);
         return true;
       });
-      if (baseGroupLinks.length) {
-        const lmEl = document.getElementById('dss-loading-msg');
-        if (lmEl) lmEl.textContent = 'Fetching current event matches…';
-        setProgress(0, baseGroupLinks.length, '', 'Group');
-        for (let gi = 0; gi < baseGroupLinks.length; gi++) {
-          if (!window._dssFindAllRunning) break;
-          const a = baseGroupLinks[gi];
-          const url = toAbsUrl(a.getAttribute('href'));
-          if (!url) continue;
-          const groupName = (a.textContent || '').trim() || `Group ${gi + 1}`;
-          setProgress(gi + 1, baseGroupLinks.length, groupName, 'Group');
-          processedCategoryUrls.add(url);
-          discoveredCategoryUrls.add(url);
-          try {
-            const resp = await fetch(url, { credentials: 'include' });
-            if (!resp.ok) continue;
-            const html = await resp.text();
-            const gdoc = new DOMParser().parseFromString(html, 'text/html');
-            try {
-              const tl = (gdoc.querySelector('.page-subhead .media__title .nav-link__value') || gdoc.querySelector('.module__title .nav-link__value') || gdoc.querySelector('.module__title') || gdoc.querySelector('.media__title'))?.textContent?.trim() || (gdoc.title || '').trim();
-              if (tl) discoveredCategoryTitles[url] = tl;
-            } catch (e) {}
-            let extracted = extractMatchesFromDoc(gdoc);
-            if (!extracted || !extracted.length) {
-              const iframeDoc = await loadGroupPageViaIframe(url);
-              if (iframeDoc) extracted = extractMatchesFromDoc(iframeDoc);
-            }
-            for (const m of (extracted || [])) {
-              if (!m || !m.team1 || !m.team2) continue;
-              const t1 = Array.isArray(m.team1) ? m.team1 : (m.team1.players || []);
-              const t2 = Array.isArray(m.team2) ? m.team2 : (m.team2.players || []);
-              if (!t1.length || !t2.length) continue;
-              collectedMatches.push({ date: m.date || null, dateTime: m.dateTime || null, team1: t1, team2: t2, winner: m.winner || null, score: Array.isArray(m.score) ? m.score : null, result: m.result || null, _playerProfiles: {}, _source: url });
-            }
-            _log(`[DSS] findAll baseline: fetched ${extracted ? extracted.length : 0} matches from ${url}`);
-          } catch (e) { console.warn('[DSS] findAll baseline group fetch failed', url, e); }
-        }
-        _log(`[DSS] findAll baseline: collectedMatches after group phase = ${collectedMatches.length}`);
-      }
     }
 
     // Convert profileMap to an array for controlled parallel processing
     const profileEntries = Array.from(profileMap.entries());
-    let profilesDone = 0;
-    setProgress(0, profileEntries.length, '', 'Profile');
+
+    // The baseline group pages and the player profiles are independent page sets —
+    // nothing in one feeds the other — so they are fetched CONCURRENTLY. Timing a real
+    // run showed them costing 3.6s + 5.5s back to back; overlapped, the pair costs
+    // roughly the slower of the two. Both use order-preserving maps and are merged
+    // below in a fixed sequence, so the collected match order is unchanged.
+    const lmEl0 = document.getElementById('dss-loading-msg');
+    if (lmEl0) lmEl0.textContent = 'Fetching current event matches and player profiles…';
+
+    // One shared counter for both phases: two phases writing to the same progress bar
+    // would make it jump back and forth.
+    const totalDiscoveryPages = baseGroupLinks.length + profileEntries.length;
+    let discoveryDone = 0;
+    const tickDiscovery = (name) => setProgress(++discoveryDone, totalDiscoveryPages, name, 'Page');
+    setProgress(0, totalDiscoveryPages, '', 'Page');
+
+    const _tDiscovery = dssTiming.now();
+
+    const baselineTask = (async () => {
+      if (!baseGroupLinks.length) return [];
+      const _tBase = dssTiming.now();
+      // Fetched concurrently; results come back in link order, so the matches land
+      // in collectedMatches in the same sequence the serial loop produced.
+      const out = await mapConcurrent(baseGroupLinks, async (a, gi) => {
+        const url = toAbsUrl(a.getAttribute('href'));
+        const groupName = (a.textContent || '').trim() || `Group ${gi + 1}`;
+        try {
+          if (!url) return null;
+          processedCategoryUrls.add(url);
+          discoveredCategoryUrls.add(url);
+          const resp = await fetch(url, { credentials: 'include' });
+          if (!resp.ok) return null;
+          const html = await resp.text();
+          const gdoc = new DOMParser().parseFromString(html, 'text/html');
+          try {
+            const tl = (gdoc.querySelector('.page-subhead .media__title .nav-link__value') || gdoc.querySelector('.module__title .nav-link__value') || gdoc.querySelector('.module__title') || gdoc.querySelector('.media__title'))?.textContent?.trim() || (gdoc.title || '').trim();
+            if (tl) discoveredCategoryTitles[url] = tl;
+          } catch (e) {}
+          let extracted = extractMatchesFromDoc(gdoc);
+          if (!extracted || !extracted.length) {
+            dssTiming.count('baseline iframe: no matches');
+            const iframeDoc = await dssTiming.track('iframe fallback', () => loadGroupPageViaIframe(url));
+            if (iframeDoc) extracted = extractMatchesFromDoc(iframeDoc);
+          }
+          _log(`[DSS] findAll baseline: fetched ${extracted ? extracted.length : 0} matches from ${url}`);
+          return { url, extracted: extracted || [] };
+        } catch (e) {
+          console.warn('[DSS] findAll baseline group fetch failed', url, e);
+          return null;
+        } finally {
+          tickDiscovery(groupName);
+        }
+      }, DSS_IFRAME_CONCURRENCY);
+      dssTiming.mark(`baseline groups (${baseGroupLinks.length})`, _tBase);
+      return out;
+    })();
 
     // Process profiles in parallel with moderate concurrency. Each mapper returns an array of candidate category anchors to follow.
-    const profileMappers = await mapWithConcurrency(profileEntries, async ([profileUrl, playerName]) => {
+    const profileTask = (async () => {
+      const _tProfiles = dssTiming.now();
+      const out = await mapConcurrent(profileEntries, async ([profileUrl, playerName]) => {
       // Early cancellation and cap checks
-      if (!window._dssFindAllRunning) return null;
-      if (categoryFetchCount >= MAX_CATEGORY_FETCHES) return null;
-      if (processedProfileUrls.has(profileUrl)) return null;
+      if (!window._dssFindAllRunning) { tickDiscovery(playerName); return null; }
+      if (categoryFetchCount >= MAX_CATEGORY_FETCHES) { tickDiscovery(playerName); return null; }
+      if (processedProfileUrls.has(profileUrl)) { tickDiscovery(playerName); return null; }
       processedProfileUrls.add(profileUrl);
-      profilesDone++;
-      setProgress(profilesDone, profileEntries.length, playerName, 'Profile');
       try {
         _log('[DSS] Fetching profile for', playerName, profileUrl);
         const resp = await fetch(profileUrl, { credentials: 'include' });
@@ -1073,8 +1094,30 @@ async function findAllSimilarCategories() {
       } catch (e) {
         console.warn('[DSS] Failed to fetch profile', profileUrl, e);
         return null;
+      } finally {
+        tickDiscovery(playerName);
       }
-    }, 6);
+      }, DSS_FETCH_CONCURRENCY);
+      dssTiming.mark(`profile pages (${profileEntries.length})`, _tProfiles);
+      return out;
+    })();
+
+    const [basePerGroup, profileMappers] = await Promise.all([baselineTask, profileTask]);
+    dssTiming.mark('discovery (baseline ∥ profiles)', _tDiscovery);
+
+    // Merge the baseline matches first, exactly as the sequential version did, so the
+    // order of collectedMatches does not depend on which task finished first.
+    for (const res of basePerGroup) {
+      if (!res) continue;
+      for (const m of res.extracted) {
+        if (!m || !m.team1 || !m.team2) continue;
+        const t1 = Array.isArray(m.team1) ? m.team1 : (m.team1.players || []);
+        const t2 = Array.isArray(m.team2) ? m.team2 : (m.team2.players || []);
+        if (!t1.length || !t2.length) continue;
+        collectedMatches.push({ date: m.date || null, dateTime: m.dateTime || null, team1: t1, team2: t2, winner: m.winner || null, score: Array.isArray(m.score) ? m.score : null, result: m.result || null, _playerProfiles: {}, _source: res.url });
+      }
+    }
+    _log(`[DSS] findAll baseline: collectedMatches after group phase = ${collectedMatches.length}`);
 
     // Flatten candidate category links in score order and dedupe by URL
     const allCandidateCategoryLinks = [];
@@ -1125,7 +1168,8 @@ async function findAllSimilarCategories() {
     if (lmEl) lmEl.textContent = 'Scanning category pages…';
     let catsDone = 0;
     setProgress(0, categoryEntries.length, '', 'Category');
-    const categoryResults = await mapWithConcurrency(categoryEntries, async (entry) => {
+    const _tCats = dssTiming.now();
+    const categoryResults = await mapConcurrent(categoryEntries, async (entry) => {
       const targetHref = entry.href;
       const txt = entry.txt;
       const token = entry.token;
@@ -1142,7 +1186,7 @@ async function findAllSimilarCategories() {
         if (categoryFetchCount >= MAX_CATEGORY_FETCHES) { console.warn('[DSS] MAX_CATEGORY_FETCHES reached; skipping', targetHref); return null; }
         if (!window._dssFindAllRunning) { _log('[DSS] findAllSimilarCategories: aborted by user before fetching', targetHref); return null; }
         _log('[DSS] Fetching category page', targetHref);
-        const pageResp = await fetch(targetHref, { credentials: 'include' });
+        const pageResp = await dssTiming.track('category fetch', () => fetch(targetHref, { credentials: 'include' }));
         if (!pageResp.ok) { console.warn('[DSS] Category fetch not OK', targetHref, pageResp.status); processedCategoryUrls.add(targetHref); return null; }
         const pageHtml = await pageResp.text();
         const pdoc = new DOMParser().parseFromString(pageHtml, 'text/html');
@@ -1164,7 +1208,7 @@ async function findAllSimilarCategories() {
               processedCategoryUrls.add(subUrl);
               discoveredCategoryUrls.add(subUrl);
               try {
-                const sr = await fetch(subUrl, { credentials: 'include' });
+                const sr = await dssTiming.track('sub-group fetch (serial)', () => fetch(subUrl, { credentials: 'include' }));
                 if (!sr.ok) continue;
                 const sh = await sr.text();
                 const sdoc = new DOMParser().parseFromString(sh, 'text/html');
@@ -1212,11 +1256,18 @@ async function findAllSimilarCategories() {
           }
         } catch (e) { console.warn('[DSS] merging event-level ratings failed', e); }
 
-        const needsIframeFallback = (!extracted || extracted.length === 0) || (Array.isArray(extracted) && extracted.some(m => !m.result));
+        const noMatches = !extracted || extracted.length === 0;
+        const someLackResult = Array.isArray(extracted) && extracted.length > 0 && extracted.some(m => !m.result);
+        const needsIframeFallback = noMatches || someLackResult;
+        // Separate the two triggers: "no matches at all" is the fallback's real purpose,
+        // while "some match has no result yet" fires on any category with an unplayed
+        // match and is the suspected cost. The counters tell us which one dominates.
+        if (noMatches) dssTiming.count('iframe: no matches');
+        if (someLackResult) dssTiming.count('iframe: missing result flag');
         if (needsIframeFallback) {
           _log('[DSS] fetch-extracted matches missing or lacking result flags; trying iframe for', targetHref);
           try {
-            const iframeDoc = await loadGroupPageViaIframe(targetHref);
+            const iframeDoc = await dssTiming.track('iframe fallback', () => loadGroupPageViaIframe(targetHref));
             if (iframeDoc) {
               const iframeExtracted = extractMatchesFromDoc(iframeDoc);
               try {
@@ -1247,7 +1298,8 @@ async function findAllSimilarCategories() {
 
         return { targetHref, extracted };
       } catch (e) { console.warn('[DSS] Failed to fetch category page', targetHref, e); try { processedCategoryUrls.add(targetHref); } catch (e) {} return null; }
-    }, 5);
+    }, DSS_IFRAME_CONCURRENCY);
+    dssTiming.mark(`category pages (${categoryEntries.length})`, _tCats);
 
     // Merge results from categoryResults into collectedMatches
     for (const r of categoryResults) {
@@ -1380,5 +1432,7 @@ async function findAllSimilarCategories() {
     try { setLoading(false); } catch (e) { console.warn('[DSS] setLoading(false) failed', e); }
     // Clear running flag
     window._dssFindAllRunning = false;
+    dssTiming.mark('TOTAL', _tFindAll);
+    dssTiming.report('Find all');
   }
 }

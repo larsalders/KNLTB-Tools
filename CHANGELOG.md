@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.4.0] — 2026-08-02
+
+### Performance
+
+**"Show Matches" fetches group pages concurrently** (draw simulator)
+The group pages behind "Show Matches" were fetched strictly one at a time — eight poule groups meant eight sequential round trips. They now run up to five at a time. The results are collected by index rather than in completion order, so the imported match list is identical to before; only the waiting overlaps.
+
+**"Refresh ratings" fetches profiles concurrently** (draw simulator)
+Same change for the per-player profile fetches. Each player writes only their own rating, so the outcome is unchanged.
+
+**Player profile ratings are cached per session**
+A profile page is fetched once and reused — for a player reached under two name spellings, or for a second import in the same session. Failed fetches are evicted so they stay retryable.
+
+**"Find all" overlaps its baseline and profile phases**
+The current event's group pages and the player profile pages are independent, so they are now fetched at the same time instead of back to back.
+
+### Diagnostics
+
+**Import timing report**
+"Show Matches" and "Find all" each print a phase-by-phase timing table to the browser console, with per-call tallies for fetches and iframe fallbacks. This is what identified where the time actually goes.
+
+### Notes on what did *not* change
+
+"Find all" is bounded by the browser's ~6 connections per host, not by how the work is scheduled. Measurements showed raising concurrency past 6 makes it slower, not faster, and that the iframe fallbacks it depends on are all genuinely necessary — those category pages render their matches client-side. The concurrency limits in `draw-state.js` are set to the measured ceiling; raising them is counterproductive.
+
+---
+
 ## [2.3.1] — 2026-08-02
 
 ### Bug fixes
