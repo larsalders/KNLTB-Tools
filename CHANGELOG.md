@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.3.1] — 2026-08-02
+
+### Bug fixes
+
+**"Go to overview" in the upcoming-match banner led to the wrong event**
+The button in the blue "Volgende wedstrijd" header on the home page resolved its target differently from the per-category buttons: it searched the *current page* for an "Onderdelen" link, which on the home page belongs to whichever tournament happens to be listed first rather than the one in the banner. It then picked the best-matching category from that unrelated tournament's page.
+
+The banner button now finds the "mijn toernooien" draw link for its own tournament and category and resolves the overview through exactly the same code path as the per-category buttons, so both land on the same page. When a tournament has sibling categories the banner text cannot tell apart, it falls back to the Onderdelen path instead of guessing a sibling. That fallback no longer scans the current page for unrelated tournaments either — it fails visibly rather than redirecting somewhere wrong.
+
+---
+
 ## [2.3.0] — 2026-07-26
 
 ### New features

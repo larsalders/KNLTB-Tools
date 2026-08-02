@@ -81,11 +81,53 @@ function addTeamAvgColumn() {
   });
 }
 
+// Selector for the draw links in the "mijn toernooien" list.
+// h4 covers single-draw categories; h5 covers multi-draw categories where h4 is the label-only header
+const CATEGORY_LINK_SELECTOR =
+  'div.module__content ul > li > h4 > span > a[href], div.module__content ul > li > h5 > span > a[href]';
+
+// Resolve a category draw link to its event overview page. This is the path that
+// reliably lands on the right page, so the banner button reuses it too.
+async function goToOverviewForDrawLink(a) {
+  const drawHref = toAbsUrl(a.getAttribute('href') || '');
+  _log('[DSS] goToOverviewForDrawLink', (a.textContent || '').trim(), drawHref);
+  const tourIdM = drawHref.match(/\/tournament\/([0-9a-f-]+)/i);
+  const tourId = tourIdM ? tourIdM[1] : null;
+
+  // 1. Check if the page already has an event.aspx link for this tournament.
+  // Scope to the link's own list item first — a tournament with several categories
+  // has one event.aspx link per category and a document-wide lookup would grab
+  // whichever comes first rather than the one belonging to this draw.
+  if (tourId) {
+    const sel = `a[href*="event.aspx"][href*="${tourId}"], a[href*="event.aspx"][href*="${tourId.toLowerCase()}"]`;
+    const scope = (a.closest && a.closest('li')) || null;
+    const pageLink = (scope && scope.querySelector(sel)) || document.querySelector(sel);
+    if (pageLink) {
+      window.location.href = toAbsUrl(pageLink.getAttribute('href'));
+      return;
+    }
+  }
+
+  // 2. Fetch the draw page and extract the event.aspx link from it
+  try {
+    const r = await fetch(drawHref, { credentials: 'include' });
+    if (r.ok) {
+      const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+      const eventLink = doc.querySelector('a[href*="event.aspx"]');
+      if (eventLink) {
+        window.location.href = new URL(eventLink.getAttribute('href'), drawHref).href;
+        return;
+      }
+    }
+  } catch (e) {}
+
+  // 3. Fallback to the slow-path, bypassing the fast-path that would re-navigate to the draw
+  const linkText = a.textContent.trim();
+  goToOverviewForCurrentEvent({ rawTitle: linkText, eventType: normalizeEventTitle(linkText), tournamentHref: drawHref, skipFastPath: true });
+}
+
 function injectCategoryOverviewButtons() {
-  // h4 covers single-draw categories; h5 covers multi-draw categories where h4 is the label-only header
-  const links = document.querySelectorAll(
-    'div.module__content ul > li > h4 > span > a[href], div.module__content ul > li > h5 > span > a[href]'
-  );
+  const links = document.querySelectorAll(CATEGORY_LINK_SELECTOR);
   links.forEach(a => {
     if (a.dataset.dssOverviewBtn) return;
     a.dataset.dssOverviewBtn = '1';
@@ -94,39 +136,10 @@ function injectCategoryOverviewButtons() {
     btn.textContent = 'Go to overview';
     btn.title = a.href;
     btn.style.cssText = 'margin-left:8px;padding:2px 8px;font-size:11px;font-weight:600;border-radius:4px;background:#193291;color:#fff;border:none;cursor:pointer;vertical-align:middle;line-height:1.6;white-space:nowrap;';
-    btn.onclick = async (e) => {
+    btn.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
-
-      const drawHref = toAbsUrl(a.getAttribute('href') || '');
-      const tourIdM = drawHref.match(/\/tournament\/([0-9a-f-]+)/i);
-      const tourId = tourIdM ? tourIdM[1] : null;
-
-      // 1. Check if the current page already has an event.aspx link for this tournament
-      if (tourId) {
-        const pageLink = document.querySelector(`a[href*="event.aspx"][href*="${tourId}"], a[href*="event.aspx"][href*="${tourId.toLowerCase()}"]`);
-        if (pageLink) {
-          window.location.href = toAbsUrl(pageLink.getAttribute('href'));
-          return;
-        }
-      }
-
-      // 2. Fetch the draw page and extract the event.aspx link from it
-      try {
-        const r = await fetch(drawHref, { credentials: 'include' });
-        if (r.ok) {
-          const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
-          const eventLink = doc.querySelector('a[href*="event.aspx"]');
-          if (eventLink) {
-            window.location.href = new URL(eventLink.getAttribute('href'), drawHref).href;
-            return;
-          }
-        }
-      } catch (e) {}
-
-      // 3. Fallback to the slow-path, bypassing the fast-path that would re-navigate to the draw
-      const linkText = a.textContent.trim();
-      goToOverviewForCurrentEvent({ rawTitle: linkText, eventType: normalizeEventTitle(linkText), tournamentHref: drawHref, skipFastPath: true });
+      goToOverviewForDrawLink(a);
     };
     a.after(btn);
   });
@@ -144,6 +157,19 @@ function normalizeEventTitle(txt) {
     .trim()
     .toLowerCase();
 }
+
+// Spelling variants of the category token in a title, e.g. "GD 17" -> gd17 / gd 17 / gd-17
+function categoryTokenVariants(text) {
+  const out = new Set();
+  const m = (text || '').toString().match(/\b(GD|HD|DD|DE|HE)\s*-?\s*(\d+)\b/i);
+  if (m) {
+    const b = m[1].toLowerCase(), n = m[2].toLowerCase();
+    out.add(b + n); out.add(b + ' ' + n); out.add(b + '-' + n);
+  }
+  return out;
+}
+
+const GROUP_RX = /\b(Groep|Pool|Poule)\s+([A-Z0-9]+)\b/i;
 
 function detectCurrentEventTitles() {
   // Reads what's on the current draw/group page
@@ -168,20 +194,11 @@ async function goToOverviewForCurrentEvent(override) {
   try { chrome.storage.local.set({ dssEventTitle: eventType || '', dssEventTitleRaw: rawTitle || '' }); } catch {}
 
   // Extract group name early (e.g. "Groep B", "Pool A") — used for fast-path and onderdelen scoring
-  const _groupRx = /\b(Groep|Pool|Poule)\s+([A-Z0-9]+)\b/i;
-  const groupName = (_groupRx.exec(eventType || '') || _groupRx.exec(rawTitle || '') || [])[0] || null;
+  const groupName = (GROUP_RX.exec(eventType || '') || GROUP_RX.exec(rawTitle || '') || [])[0] || null;
 
   // Build token variants early so the fast-path can use them
-  const tokenVariants = new Set();
-  {
-    const _tv = (eventType || rawTitle || '').toString();
-    const _m = _tv.match(/\b(GD|HD|DD|DE|HE)\s*-?\s*(\d+)\b/i);
-    if (_m) {
-      const b = _m[1].toLowerCase(), n = _m[2].toLowerCase();
-      tokenVariants.add(b + n); tokenVariants.add(b + ' ' + n); tokenVariants.add(b + '-' + n);
-    }
-    if (!tokenVariants.size && rawTitle) tokenVariants.add(rawTitle.toLowerCase());
-  }
+  const tokenVariants = categoryTokenVariants(eventType || rawTitle || '');
+  if (!tokenVariants.size && rawTitle) tokenVariants.add(rawTitle.toLowerCase());
 
   // Fast path: find a draw link on the current page that matches the category (+group).
   // Covers the home-page case where "mijn toernooien" has the right group-specific link.
@@ -225,16 +242,22 @@ async function goToOverviewForCurrentEvent(override) {
     } catch (e) { return null; }
   }
 
-  // First, attempt to find an Onderdelen link on the CURRENT page using familiar selectors
-  const navCandidates = Array.from(document.querySelectorAll('a.page-nav__link, .page-nav a, nav a, a[role="tab"], a'))
-    .filter(a => a.getAttribute && a.getAttribute('href'));
-  const textMatch = navCandidates.find(a => /onderdeel/i.test(a.textContent || '')) || navCandidates.find(a => /onderdelen/i.test(a.textContent || ''));
-  let onderdelenHref = textMatch ? toAbsUrl(textMatch.getAttribute('href')) : null;
+  // Allow caller to force which tournament page to consult
+  const forcedTourHref = (override && override.tournamentHref) ? toAbsUrl(override.tournamentHref) : null;
+
+  let onderdelenHref = null;
+  // Only look for an Onderdelen link on the CURRENT page when the caller has not told us
+  // which tournament it means. On the home page any "Onderdelen" anchor belongs to
+  // whichever tournament happens to be listed first, which sends us to the wrong event.
+  if (!forcedTourHref) {
+    const navCandidates = Array.from(document.querySelectorAll('a.page-nav__link, .page-nav a, nav a, a[role="tab"], a'))
+      .filter(a => a.getAttribute && a.getAttribute('href'));
+    const textMatch = navCandidates.find(a => /onderdeel/i.test(a.textContent || '')) || navCandidates.find(a => /onderdelen/i.test(a.textContent || ''));
+    if (textMatch) onderdelenHref = toAbsUrl(textMatch.getAttribute('href'));
+  }
 
   // If not found on the current page, try following the tournament/master link at the top of the page
   if (!onderdelenHref) {
-    // Allow caller to force which tournament page to consult
-    const forcedTourHref = (override && override.tournamentHref) ? toAbsUrl(override.tournamentHref) : null;
     const topTournamentAnchor = forcedTourHref ? null : document.querySelector('.page-subhead .media__title a[href], .module__title a[href], a.tournament__link, a[href*="/tournament"], a[href*="tournament.aspx"]');
     const tourCandidate = forcedTourHref || (topTournamentAnchor ? toAbsUrl(topTournamentAnchor.getAttribute('href')) : null);
     if (tourCandidate) {
@@ -266,8 +289,10 @@ async function goToOverviewForCurrentEvent(override) {
     }
   }
 
-  // If still not found, try scanning document-wide anchors as a final heuristic
-  if (!onderdelenHref) {
+  // If still not found, try scanning document-wide anchors as a final heuristic.
+  // Skipped when the caller named a tournament: anything we'd find here comes from an
+  // unrelated tournament on the current page, so failing loudly beats a wrong redirect.
+  if (!onderdelenHref && !forcedTourHref) {
     const hrefCandidates = Array.from(document.querySelectorAll('a[href]'));
     let best = null; let bestScore = 0;
     const wantToken = (eventType || rawTitle || '').toLowerCase();
@@ -412,24 +437,61 @@ function addGoToOverviewButton() {
   }
 }
 
+// The tournament ID referenced by the banner's tournament link, or null.
+function bannerTournamentId(banner) {
+  const tourA = banner.querySelector('a[href*="/tournament"], a[href*="tournament.aspx"]');
+  if (!tourA) return null;
+  const tourHref = tourA.getAttribute('href') || '';
+  const m = tourHref.match(/\/tournament\/([0-9a-f-]+)/i) || tourHref.match(/[?&]id=([0-9a-f-]+)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+// The "mijn toernooien" draw links belonging to one tournament.
+// Draw links use /sport/draw.aspx?id=UUID format, so match by tourId rather than a path prefix.
+function categoryLinksForTournament(tourId) {
+  return Array.from(document.querySelectorAll(CATEGORY_LINK_SELECTOR))
+    .filter(a => (a.getAttribute('href') || '').toLowerCase().includes(tourId));
+}
+
 // Returns true when the banner's tournament ID appears in the "mijn toernooien" category links,
 // meaning the upcoming match is a tournament match rather than regular competition.
 function bannerBelongsToTournament(banner) {
-  const tourA = banner.querySelector('a[href*="/tournament"], a[href*="tournament.aspx"]');
-  if (!tourA) return false;
-  const tourHref = tourA.getAttribute('href') || '';
-  const m = tourHref.match(/\/tournament\/([0-9a-f-]+)/i) || tourHref.match(/[?&]id=([0-9a-f-]+)/i);
-  if (!m) return false;
-  const tourId = m[1].toLowerCase();
-  // Match draw links in both h4 (single-draw categories) and h5 (multi-draw categories).
-  // Draw links use /sport/draw.aspx?id=UUID format, so match by tourId rather than a path prefix.
-  const catLinks = document.querySelectorAll(
-    'div.module__content ul > li > h4 > span > a[href], div.module__content ul > li > h5 > span > a[href]'
-  );
-  for (const a of catLinks) {
-    if ((a.getAttribute('href') || '').toLowerCase().includes(tourId)) return true;
-  }
-  return false;
+  const tourId = bannerTournamentId(banner);
+  return !!tourId && categoryLinksForTournament(tourId).length > 0;
+}
+
+// Pick the "mijn toernooien" draw link matching the banner's category, so the banner
+// button can resolve the overview through the same route as the per-category buttons.
+// Returns null when the category cannot be pinned down unambiguously — better to let
+// the Onderdelen slow path try than to navigate to a sibling category.
+function findCategoryLinkForBanner(banner, rawTitle) {
+  const tourId = bannerTournamentId(banner);
+  if (!tourId) return null;
+  const catLinks = categoryLinksForTournament(tourId);
+  if (catLinks.length <= 1) return catLinks[0] || null;
+
+  const want = normalizeEventTitle(rawTitle);
+  if (!want) return null;
+  const wantTokens = categoryTokenVariants(want);
+  const groupM = GROUP_RX.exec(rawTitle || '');
+  const groupL = groupM ? groupM[0].toLowerCase() : null;
+
+  const scored = catLinks.map(a => {
+    const raw = (a.textContent || '').trim();
+    const txt = normalizeEventTitle(raw);
+    let score = 0;
+    if (txt) {
+      if (txt === want) score += 200;
+      else if (txt.includes(want) || want.includes(txt)) score += 60;
+      for (const tv of wantTokens) { if (txt.includes(tv)) { score += 40; break; } }
+      if (groupL && raw.toLowerCase().includes(groupL)) score += 80;
+    }
+    return { a, score };
+  }).sort((x, y) => y.score - x.score);
+
+  // Require a clear winner: a tie means the category text did not discriminate
+  if (!scored[0].score || scored[0].score === scored[1].score) return null;
+  return scored[0].a;
 }
 
 // Add a Go to overview button into the main upcoming-match banner when present
@@ -482,7 +544,19 @@ function addGoToOverviewMainBanner() {
           const titleNode = banner.querySelector('.comparison-heading__title .nav-link__value') || banner.querySelector('.comparison-heading__title') || banner.querySelector('.comparison-heading__time');
           if (titleNode) rawTitle = (titleNode.textContent || '').trim();
         }
-        let eventType = normalizeEventTitle(rawTitle);
+        const eventType = normalizeEventTitle(rawTitle);
+
+        // Preferred route: the "mijn toernooien" draw link for this tournament + category
+        // is right here on the page, and resolving from it is what the per-category
+        // buttons do. Guessing from the banner text alone is what sent us to the wrong
+        // event, so only fall through to that when the category cannot be pinned down.
+        const catLink = findCategoryLinkForBanner(banner, rawTitle);
+        _log('[DSS] banner overview: rawTitle=', rawTitle, 'matched category link=', catLink ? (catLink.textContent || '').trim() : null);
+        if (catLink) {
+          goToOverviewForDrawLink(catLink);
+          return;
+        }
+
         // Also capture tournament link in the banner (e.g., 'Peelland toernooi 2025') so we can fetch its page
         let tournamentHref = null;
         try {
