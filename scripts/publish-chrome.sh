@@ -10,9 +10,12 @@
 #   scripts/publish-chrome.sh --publish       # upload, then submit for review
 #   scripts/publish-chrome.sh --zip path.zip  # upload a specific package
 #
-# Credentials come from the environment (see docs/chrome-web-store.md):
-#   CWS_CLIENT_ID  CWS_CLIENT_SECRET  CWS_REFRESH_TOKEN
-#   CWS_EXTENSION_ID  (optional, defaults to the published KNLTB Tools item)
+# Credentials come from the environment (see docs/chrome-web-store.md). The first
+# of these that is set wins:
+#   CWS_SERVICE_ACCOUNT_KEY  path to a service account JSON key  (preferred)
+#   CWS_ACCESS_TOKEN         a token you already obtained, e.g. via gcloud
+#   CWS_CLIENT_ID + CWS_CLIENT_SECRET + CWS_REFRESH_TOKEN       (older OAuth flow)
+#   CWS_EXTENSION_ID         optional, defaults to the published KNLTB Tools item
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -30,12 +33,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for var in CWS_CLIENT_ID CWS_CLIENT_SECRET CWS_REFRESH_TOKEN; do
-  if [[ -z "${!var:-}" ]]; then
-    echo "ERROR: $var is not set. See docs/chrome-web-store.md for the one-time setup." >&2
-    exit 1
-  fi
-done
+if [[ -z "${CWS_SERVICE_ACCOUNT_KEY:-}" && -z "${CWS_ACCESS_TOKEN:-}" && -z "${CWS_CLIENT_ID:-}" ]]; then
+  cat >&2 <<'MSG'
+ERROR: no Chrome Web Store credentials found. Set one of:
+
+  CWS_SERVICE_ACCOUNT_KEY=/path/to/key.json     (service account — preferred)
+  CWS_ACCESS_TOKEN=ya29....                     (token obtained elsewhere)
+  CWS_CLIENT_ID + CWS_CLIENT_SECRET + CWS_REFRESH_TOKEN
+
+See docs/chrome-web-store.md for the one-time setup.
+MSG
+  exit 1
+fi
 
 if [[ -z "$ZIP" ]]; then
   VERSION=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
@@ -48,15 +57,41 @@ jqf() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$1',''
 echo "Extension: $EXTENSION_ID"
 echo "Package:   $ZIP"
 
-# 1. Exchange the long-lived refresh token for a short-lived access token
-ACCESS_TOKEN=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
-  -d "client_id=${CWS_CLIENT_ID}" \
-  -d "client_secret=${CWS_CLIENT_SECRET}" \
-  -d "refresh_token=${CWS_REFRESH_TOKEN}" \
-  -d "grant_type=refresh_token" | jqf access_token)
+# 1. Obtain a short-lived access token
+if [[ -n "${CWS_SERVICE_ACCOUNT_KEY:-}" ]]; then
+  echo "Auth:      service account"
+  [[ -f "$CWS_SERVICE_ACCOUNT_KEY" ]] || {
+    echo "ERROR: service account key not found: $CWS_SERVICE_ACCOUNT_KEY" >&2; exit 1; }
+  JWT=$("$(dirname "$0")/cws-jwt.py" "$CWS_SERVICE_ACCOUNT_KEY") || exit 1
+  TOKEN_RESPONSE=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
+    --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer" \
+    --data-urlencode "assertion=${JWT}")
+elif [[ -n "${CWS_ACCESS_TOKEN:-}" ]]; then
+  echo "Auth:      preset access token"
+  TOKEN_RESPONSE=""
+else
+  echo "Auth:      OAuth refresh token"
+  for var in CWS_CLIENT_SECRET CWS_REFRESH_TOKEN; do
+    [[ -n "${!var:-}" ]] || { echo "ERROR: $var is not set." >&2; exit 1; }
+  done
+  TOKEN_RESPONSE=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
+    -d "client_id=${CWS_CLIENT_ID}" \
+    -d "client_secret=${CWS_CLIENT_SECRET}" \
+    -d "refresh_token=${CWS_REFRESH_TOKEN}" \
+    -d "grant_type=refresh_token")
+fi
+
+if [[ -n "${CWS_ACCESS_TOKEN:-}" && -z "$TOKEN_RESPONSE" ]]; then
+  ACCESS_TOKEN="$CWS_ACCESS_TOKEN"
+else
+  ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jqf access_token)
+fi
 
 if [[ -z "$ACCESS_TOKEN" ]]; then
-  echo "ERROR: could not obtain an access token — check the three CWS_* credentials." >&2
+  echo "ERROR: could not obtain an access token." >&2
+  # Surface Google's own reason — "invalid_grant" here usually means the service
+  # account has not been added under Account in the Developer Dashboard yet.
+  echo "$TOKEN_RESPONSE" | python3 -m json.tool >&2 2>/dev/null || echo "$TOKEN_RESPONSE" >&2
   exit 1
 fi
 

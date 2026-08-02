@@ -12,72 +12,61 @@ scripts/publish-chrome.sh --publish   # upload, then submit for review
 Uploading only replaces the draft and can be repeated freely. Submitting for review
 is the outward-facing step, which is why it needs the explicit `--publish` flag.
 
-## One-time setup
+## One-time setup — service account (recommended)
 
-This part has to be done by hand — it needs consent from a Google account in a
-browser, and the credentials it produces cannot be generated non-interactively.
+Follows Google's [service accounts guide](https://developer.chrome.com/docs/webstore/service-accounts).
+Unlike the OAuth flow below, there is no browser consent step and no token that
+quietly expires after a week, which is why it's the better fit here.
 
-### 1. Enable the API
+### 1. Google Cloud
 
-1. Open the [Google Cloud console](https://console.cloud.google.com/) and create a
-   project (any name — it only exists to own the OAuth client).
-2. Under **APIs & Services → Library**, enable **Chrome Web Store API**.
+1. [Google Cloud console](https://console.cloud.google.com/) → create or pick a project.
+2. **APIs & Services → Library** → enable **Chrome Web Store API**.
+3. **IAM & Admin → Service Accounts** → create one. It needs **no roles or
+   permissions** — its authority comes from the Developer Dashboard, not from IAM.
+4. Open the service account → **Keys → Add key → Create new key → JSON**, and save
+   the downloaded file somewhere outside the repo (for example
+   `~/.config/knltb-tools/cws-service-account.json`, `chmod 600`).
 
-### 2. Create an OAuth client
+### 2. Developer Dashboard — the step that actually grants access
 
-1. **APIs & Services → OAuth consent screen** → External → fill in the required
-   fields. It stays in *Testing* mode; add your own Google account under
-   **Test users**. No verification is needed for personal use.
-2. **APIs & Services → Credentials → Create credentials → OAuth client ID**
-   → application type **Desktop app**.
-3. Note the **client ID** and **client secret**.
+In the [Developer Dashboard](https://chrome.google.com/webstore/devconsole/) go to
+**Account** and add the service account's email address
+(`something@your-project.iam.gserviceaccount.com`) as a user.
 
-Because the consent screen stays in Testing mode, refresh tokens expire after
-7 days. To get a non-expiring token, set the consent screen to **In production**
-(publishing status → Publish app). No Google review is required for this scope.
+Nothing works until this is done: token requests fail with `invalid_grant` or the
+upload returns a permission error. **A publisher can have only one service account**,
+so if one is ever already registered, that's the one to use.
 
-### 3. Get a refresh token
-
-Open this URL in a browser, replacing `<CLIENT_ID>`:
-
-```
-https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=<CLIENT_ID>&redirect_uri=urn:ietf:wg:oauth:2.0:oob
-```
-
-Approve the request and copy the authorization code, then exchange it — the code is
-single-use and expires within minutes, so do this straight away:
+### 3. Point the script at the key
 
 ```bash
-curl -s -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=<CLIENT_ID>" \
-  -d "client_secret=<CLIENT_SECRET>" \
-  -d "code=<AUTH_CODE>" \
-  -d "grant_type=authorization_code" \
-  -d "redirect_uri=urn:ietf:wg:oauth:2.0:oob"
+export CWS_SERVICE_ACCOUNT_KEY=~/.config/knltb-tools/cws-service-account.json
 ```
 
-The response contains `refresh_token`. That value is long-lived; treat it like a
-password.
+The script builds a signed JWT from the key (`scripts/cws-jwt.py`, using `openssl`
+for the RSA signature) and exchanges it for a short-lived access token. Nothing
+sensitive is written into the repository.
 
-### 4. Store the three values
+### Using gcloud instead of a key file
 
-The scripts read credentials from the environment, so nothing sensitive is written
-into the repository. Keeping them in the macOS keychain matches how the Forgejo and
-GitHub credentials are already handled:
+If you'd rather not have a key file on disk and you install the `gcloud` CLI, grant
+your own account `roles/iam.serviceAccountTokenCreator` on the service account and
+hand the script a token directly:
 
 ```bash
-security add-generic-password -s chrome-webstore -a client_id     -w '<CLIENT_ID>'
-security add-generic-password -s chrome-webstore -a client_secret -w '<CLIENT_SECRET>'
-security add-generic-password -s chrome-webstore -a refresh_token -w '<REFRESH_TOKEN>'
+export CWS_ACCESS_TOKEN=$(gcloud auth print-access-token \
+  --impersonate-service-account=<SA_EMAIL> \
+  --scopes=https://www.googleapis.com/auth/chromewebstore)
 ```
 
-Then before publishing:
+## Alternative: OAuth refresh token
 
-```bash
-export CWS_CLIENT_ID=$(security find-generic-password -s chrome-webstore -a client_id -w)
-export CWS_CLIENT_SECRET=$(security find-generic-password -s chrome-webstore -a client_secret -w)
-export CWS_REFRESH_TOKEN=$(security find-generic-password -s chrome-webstore -a refresh_token -w)
-```
+Still supported by the script via `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` /
+`CWS_REFRESH_TOKEN`. It needs an interactive browser consent, and while the OAuth
+consent screen is in *Testing* mode the refresh token expires after 7 days — set the
+screen to *In production* to avoid that. The service account route has neither
+problem.
 
 ## What to expect
 
